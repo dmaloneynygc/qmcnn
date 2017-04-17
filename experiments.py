@@ -61,11 +61,7 @@ class Model:
         state_new = self.sample_state.copy()
         state_new[flip] *= -1
         log_psi_new = self.log_psi(state_new)
-        # spin_old = self.sample_state[flip]
-        # thetas_new = self.sample_thetas - 2*spin_old*self.weights[:, flip]
-        # log_psi_new = np.dot(self.bias_vis, state_new)
-        # log_psi_new += np.sum(self.log2cosh(thetas_new))
-        A = np.absolute(np.exp(log_psi_new - self.sample_log_psi))
+        A = np.power(np.absolute(np.exp(log_psi_new - self.sample_log_psi)), 2)
 
         if A > np.random.rand():
             # self.sample_thetas = thetas_new
@@ -74,12 +70,10 @@ class Model:
             self.accepted += 1
         self.moves += 1
 
-        return self.sample_state
-
     def sample(self, num):
         """Sample num states."""
         print("Thermalising")
-        for _ in range(int(self.THERMFACTOR*self.SWEEPFACTOR*self.n_vis)):
+        for _ in range(int(num*self.THERMFACTOR*self.SWEEPFACTOR*self.n_vis)):
             self.sample_step()
 
         samples = np.zeros((num, self.n_vis), dtype=np.int8)
