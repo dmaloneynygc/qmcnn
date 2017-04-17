@@ -9,6 +9,7 @@ class Model:
     INIT_PARAM_SCALE = 1E-4
     THERMFACTOR = 0.1
     SWEEPFACTOR = 1
+    N_SAMPLERS = 100
 
     H = 1
 
@@ -50,40 +51,42 @@ class Model:
 
     def init_sample_state(self):
         """Random init sample state and lookup tables."""
-        self.sample_state = bernoulli.rvs(.5, size=self.n_vis) * 2 - 1
-        self.sample_thetas = self.theta(self.sample_state)
-        self.sample_log_psi = self.log_psi(
-            self.sample_state, self.sample_thetas)
+        self.sample_states = -1+2*bernoulli.rvs(
+            .5, size=(self.N_SAMPLERS, self.n_vis))
+        self.sample_log_psis = self.log_psi(self.sample_states)
 
     def sample_step(self):
         """Do Metropolis-Hastings spinflip sampling step."""
-        flip = np.random.randint(self.n_vis)
-        state_new = self.sample_state.copy()
-        state_new[flip] *= -1
-        log_psi_new = self.log_psi(state_new)
-        A = np.power(np.absolute(np.exp(log_psi_new - self.sample_log_psi)), 2)
+        spinflips = np.random.randint(self.n_vis, size=self.N_SAMPLERS)
+        states_new = self.sample_states.copy()
+        states_new[np.arange(self.N_SAMPLERS), spinflips] *= -1
+        log_psis_new = self.log_psi(states_new)
+        log_pop = log_psis_new - self.sample_log_psis
+        A = np.power(np.absolute(np.exp(log_pop)), 2)
 
-        if A > np.random.rand():
-            # self.sample_thetas = thetas_new
-            self.sample_state = state_new
-            self.sample_log_psi = log_psi_new
-            self.accepted += 1
-        self.moves += 1
+        accepted = A > np.random.rand(self.N_SAMPLERS)
+        self.sample_states[accepted] = states_new[accepted]
+        self.sample_log_psis[accepted] = log_psis_new[accepted]
+        self.moves += self.N_SAMPLERS
+        self.accepted += np.sum(accepted)
 
     def sample(self, num):
         """Sample num states."""
         print("Thermalising")
-        for _ in range(int(num*self.THERMFACTOR*self.SWEEPFACTOR*self.n_vis)):
+        n_sweeps = int(num / self.N_SAMPLERS)
+        for _ in range(int(self.THERMFACTOR*self.SWEEPFACTOR*n_sweeps)):
             self.sample_step()
 
         samples = np.zeros((num, self.n_vis), dtype=np.int8)
 
         self.moves, self.accepted = 0, 0
         print("Sampling")
-        for i in range(num):
+        for i in range(n_sweeps):
             for _ in range(int(self.SWEEPFACTOR * self.n_vis)):
                 self.sample_step()
-            samples[i, :] = self.sample_state
+            n_sample = i*self.N_SAMPLERS
+            samples[n_sample:self.N_SAMPLERS+n_sample, :] = \
+                self.sample_states
         print("Accepted %d / %d = %f %%" %
               (self.accepted, self.moves, self.accepted / self.moves))
 
@@ -104,16 +107,22 @@ class Model:
         """Compute expected energy per spin of quantum state."""
         if samples is None:
             samples = self.sample(num_its)
-        print("Computing energy")
-        # energies = np.real([self.local_energy(state) for state in samples])
         energies = np.real(self.local_energy(samples))
-        energies /= self.n_vis
-        return np.mean(energies), np.std(energies)
+        return energies
 
     def energy_from_sample_file(self, path):
         """Compute energy from Carleo sampled state."""
         samples = np.loadtxt('../Nqs/states.txt', dtype=np.int8)
         return self.energy(None, samples)
+
+    def derivatives(self, states):
+        """Compute derivatives from batch of state."""
+        t = self.theta(states)
+        d_bias_vis = states
+        d_bias_hid = t
+        d_weights = (t[:, :, np.newaxis] * states[:, np.newaxis, :]).reshape(
+            (states.shape[0], -1))
+        return np.hstack(d_bias_vis, d_bias_hid, d_weights)
 
     @classmethod
     def from_carleo_params(cls, path):
@@ -138,5 +147,6 @@ class Model:
 
 path = '../Nqs/Ground/Ising1d_40_1_1.wf'
 model = Model.from_carleo_params(path)
-model.energy(100)
+samples = model.sample(10000)
+# print(model.energy(1000))
 # model.energy_from_sample_file('../Nqs/states.txt')
