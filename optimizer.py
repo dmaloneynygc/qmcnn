@@ -19,16 +19,17 @@ class Optimizer:
             O = self.model.backward(samples)
             O_conj = np.conj(O)
 
-            S = np.mean(O_conj[:, :, np.newaxis] * O[:, np.newaxis, :],
-                        axis=0)
-            S -= np.mean(O_conj[:, :, np.newaxis], axis=0) * \
-                np.mean(O[:, :, np.newaxis], axis=0)
+            S = np.dot(O_conj.T, O)/num_samples
+            S -= np.mean(O_conj, axis=0)[:, np.newaxis] * \
+                np.mean(O, axis=0)[np.newaxis, :]
+            S_iv = np.linalg.pinv(S)
 
             F = np.mean(E[:, np.newaxis] * O_conj, axis=0)
             F -= np.mean(E[:, np.newaxis], axis=0)*np.mean(O_conj, axis=0)
 
-            delta = -1E-3 * np.dot(np.linalg.pinv(S), F)
+            delta = -1E-5 * np.dot(S_iv, F)
 
             self.model.params += delta
 
-            print("Iteration %d/%d, E=%f", it, iterations, np.mean(E))
+            print("Iteration %d/%d, E=%f (%f)" %
+                  (it, iterations, np.real(np.mean(E)), np.std(E)))
