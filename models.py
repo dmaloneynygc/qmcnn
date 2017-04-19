@@ -16,19 +16,24 @@ def log2cosh(x):
 class CRBM():
     """Marginalised CRBM model. Return log psi and derivatives of logs."""
 
-    INIT_PARAM_SCALE = 1E-4
+    INIT_PARAM_SCALE = 1E-2
 
     def __init__(self, n_spins, n_hid):
         """Initialise model."""
         self.n_spins = n_spins
         self.n_hid = n_hid
         self.n_params = (n_spins + 1) * (n_hid + 1) - 1
-        self.params = self.INIT_PARAM_SCALE * \
-            (np.random.randn(self.n_params) +
-             1j * np.random.randn(self.n_params))
-        self.bias_vis = self.params[:n_spins]
-        self.bias_hid = self.params[n_spins:n_spins+n_hid]
-        self.weights = self.params[n_spins+n_hid:].reshape((n_hid, n_spins))
+        self.set_params(self.INIT_PARAM_SCALE *
+                        (np.random.randn(self.n_params) +
+                         1j * np.random.randn(self.n_params)))
+
+    def set_params(self, params):
+        """Set params."""
+        self.params = params
+        self.bias_vis = self.params[:self.n_spins]
+        self.bias_hid = self.params[self.n_spins:self.n_spins+self.n_hid]
+        self.weights = self.params[self.n_spins+self.n_hid:].reshape(
+            (self.n_hid, self.n_spins))
 
     def theta(self, states):
         """Compute thetas for one or more spin states."""
@@ -63,7 +68,5 @@ class CRBM():
 
         params = data[:, 0] + 1j * data[:, 1]
         model = cls(n_spins, n_hid)
-        model.bias_vis = params[:n_spins]
-        model.bias_hid = params[n_spins:n_hid+n_spins]
-        model.weights = params[n_spins+n_hid:].reshape((n_hid, n_spins))
+        model.set_params(params)
         return model

@@ -6,8 +6,8 @@ from scipy.stats import bernoulli
 class Sampler:
     """Model class. 1D Ising, CRBM."""
 
-    THERMFACTOR = 0.1
-    SWEEPFACTOR = 1
+    THERMFACTOR = 2
+    SWEEPFACTOR = 2
     N_SAMPLERS = 100
 
     def __init__(self, n_spins, model):
@@ -40,6 +40,7 @@ class Sampler:
 
     def sample(self, num):
         """Sample num states."""
+        self.init_sample_state()
         n_sweeps = int(num / self.N_SAMPLERS)
         for _ in range(int(self.THERMFACTOR*self.SWEEPFACTOR*n_sweeps)):
             self.sample_step()
