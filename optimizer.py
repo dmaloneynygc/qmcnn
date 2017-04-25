@@ -40,3 +40,29 @@ class Optimizer:
                    np.mean(np.absolute(self.model.params)),
                    np.mean(np.absolute(delta)),
                    time_sample, time_model, time_solve))
+
+
+class TFOptimizer:
+    """Ground state optimizer."""
+
+    def __init__(self, model, sampler, system):
+        """Initialise."""
+        self.model = model
+        self.sampler = sampler
+        self.system = system
+
+    def optimize(self, iterations, num_samples):
+        """Perform optimization."""
+        for it in range(iterations):
+            start = time()
+            samples = self.sampler.sample(num_samples)
+            time_sample, start = time()-start, time()
+            E = self.system.local_energy(samples)
+            time_energy, start = time()-start, time()
+            self.model.optimize(samples, E)
+            time_optimize, start = time()-start, time()
+
+            print(("Iteration %d/%d, E=%f (%.2f), "
+                   "(%.2fs, %.2fs, %.2fs)") %
+                  (it, iterations, np.real(np.mean(E)), np.std(E),
+                   time_sample, time_energy, time_optimize))

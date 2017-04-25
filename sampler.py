@@ -6,8 +6,8 @@ from scipy.stats import bernoulli
 class Sampler:
     """Model class. 1D Ising, CRBM."""
 
-    THERMFACTOR = 2
-    SWEEPFACTOR = 2
+    THERMFACTOR = 1
+    SWEEPFACTOR = 1
     N_SAMPLERS = 100
 
     def __init__(self, n_spins, model):

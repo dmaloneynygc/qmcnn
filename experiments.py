@@ -1,9 +1,9 @@
 """Experiments module."""
 import numpy as np
-from models import CRBM
+from models import CRBM, ConvCRBM
 from systems import Ising1D
 from sampler import Sampler
-from optimizer import Optimizer
+from optimizer import Optimizer, TFOptimizer
 
 # path = '../Nqs/Ground/Ising1d_40_1_1.wf'
 # model = CRBM.from_carleo_params(path)
@@ -12,11 +12,18 @@ from optimizer import Optimizer
 # print(np.mean(system.local_energy(sampler.sample(10000))))
 # print(np.mean(system.local_energy(sampler.sample(10000))))
 
-n_spins = 40
+# n_spins = 40
 # path = '../Nqs/Ground/Ising1d_40_1_1.wf'
 # model = CRBM.from_carleo_params(path)
-model = CRBM(n_spins, 40)
+# model = CRBM(n_spins, 40)
+# system = Ising1D(1., n_spins, model)
+# sampler = Sampler(n_spins, model)
+# optimizer = Optimizer(model, sampler, system)
+# optimizer.optimize(100, 10000)
+
+n_spins = 40
+model = ConvCRBM(n_spins, 4, 39)
 system = Ising1D(1., n_spins, model)
 sampler = Sampler(n_spins, model)
-optimizer = Optimizer(model, sampler, system)
-optimizer.optimize(100, 10000)
+optimizer = TFOptimizer(model, sampler, system)
+optimizer.optimize(100, 1000)

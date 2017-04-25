@@ -36,6 +36,8 @@ tiled = tf.tile(state, [1, 3])
 padded = tiled[:, n_spins-pad_size:-n_spins+pad_size]
 padded_3d = padded[:, None, None, :, None]
 filters_3d = filters[None, None, :, None, :]
+# As the states are real-valued, we can split the convolution in 2 parts
+# since TF doesn't support complex convolution
 filters_3d_re = tf.real(filters_3d)
 filters_3d_im = tf.imag(filters_3d)
 theta_re = tf.nn.conv3d(
@@ -54,7 +56,7 @@ log_psi += tf.reduce_sum(A, [1, 2, 3, 4])
 
 num_samples = tf.cast(tf.shape(state)[0], tf.complex64)
 energy_avg = tf.reduce_sum(energy)/num_samples
-f = tf.reduce_sum(energy[:, None]*log_psi, 0)/num_samples
+f = tf.reduce_sum(energy*log_psi, 0)/num_samples
 f -= energy_avg * tf.reduce_sum(log_psi, 0)/num_samples
 
 sess.run(tf.global_variables_initializer())
