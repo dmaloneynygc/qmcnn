@@ -13,6 +13,7 @@ class Sampler:
     def __init__(self, n_spins, model):
         """Initialise."""
         self.n_spins = n_spins
+        self.total_spins = np.prod(n_spins)
         self.model = model
         self.init_sample_state()
         self.moves, self.accepted = 0, 0
@@ -20,14 +21,16 @@ class Sampler:
     def init_sample_state(self):
         """Random init sample state and lookup tables."""
         self.sample_states = -1+2*bernoulli.rvs(
-            .5, size=(self.N_SAMPLERS, self.n_spins))
+            .5, size=[self.N_SAMPLERS]+self.n_spins)
         self.sample_log_psis = self.model.forward(self.sample_states)
 
     def sample_step(self):
         """Do Metropolis-Hastings spinflip sampling step."""
-        spinflips = np.random.randint(self.n_spins, size=self.N_SAMPLERS)
-        states_new = self.sample_states.copy()
+        spinflips = np.random.randint(self.total_spins, size=self.N_SAMPLERS)
+        states_new = self.sample_states.copy() \
+            .reshape(self.N_SAMPLERS, self.total_spins).copy()
         states_new[np.arange(self.N_SAMPLERS), spinflips] *= -1
+        states_new = states_new.reshape([self.N_SAMPLERS]+self.n_spins)
         log_psis_new = self.model.forward(states_new)
         log_pop = log_psis_new - self.sample_log_psis
         A = np.power(np.absolute(np.exp(log_pop)), 2)
@@ -45,14 +48,14 @@ class Sampler:
         for _ in range(int(self.THERMFACTOR*self.SWEEPFACTOR*n_sweeps)):
             self.sample_step()
 
-        samples = np.zeros((num, self.n_spins), dtype=np.int8)
+        samples = np.zeros([num]+self.n_spins, dtype=np.int8)
 
         self.moves, self.accepted = 0, 0
         for i in range(n_sweeps):
-            for _ in range(int(self.SWEEPFACTOR * self.n_spins)):
+            for _ in range(int(self.SWEEPFACTOR * self.total_spins)):
                 self.sample_step()
             n_sample = i*self.N_SAMPLERS
-            samples[n_sample:self.N_SAMPLERS+n_sample, :] = \
+            samples[n_sample:self.N_SAMPLERS+n_sample, ...] = \
                 self.sample_states
 
         return samples

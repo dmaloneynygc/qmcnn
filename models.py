@@ -95,8 +95,11 @@ class ConvCRBM:
         dims is number of dimensions.
         """
         self.n_spins = n_spins
+        self.n_dims = len(n_spins)
+        self.n_spins_3d = n_spins + [1]*(3-self.n_dims)
         self.alpha = alpha
         self.r = r
+        self.filter_shape = [r]*self.n_dims+[1]*(3-self.n_dims)+[1, self.alpha]
         self.build_graph()
         self.writer = tf.summary.FileWriter('./logs', self.session.graph)
 
@@ -125,14 +128,53 @@ class ConvCRBM:
         im = tf.Variable(np.imag(value), name=("%s_im" % name), dtype=dtype)
         return tf.complex(re, im, name=name)
 
+    def _complex_wrapped_conv(self, x, filters, n_dims):
+        """Do complex n-D convolution with periodic bounadry conditions.
+
+        Works through tiling and slicing.
+        x: [batch, z, y, x, in_channels]
+        filters: [z, y, x, in_channels, out_channels]
+        n_dims: the number of spatial dimensions to wrap
+        """
+        shape = tf.shape(x)
+        filter_shape = tf.shape(filters)
+        size = shape[1:-1]  # Spatial size
+        filter_size = filter_shape[:3]
+
+        # Make periodic boundary conditions by tiling the space
+        tiled = tf.tile(x, [1]+[3]*n_dims+[1]*(3-n_dims+1))
+        pad_size = tf.to_int32((filter_size-1)/2)
+
+        # Slice s.t. VALID convolution yields original size
+        slice_start = [0]+[size[d]-pad_size[d] if d < n_dims else 0
+                           for d in range(3)]+[0]
+        slice_size = [shape[0]]+[size[d]+2*pad_size[d]
+                                 if d < n_dims else size[d]
+                                 for d in range(3)]+[shape[4]]
+        sliced = tf.slice(tiled, slice_start, slice_size)
+        filters_re = tf.real(filters)
+        filters_im = tf.imag(filters)
+        res_re = tf.nn.conv3d(
+            sliced,
+            filters_re,
+            (1,)*5, 'VALID')
+        res_im = tf.nn.conv3d(
+            sliced,
+            filters_im,
+            (1,)*5, 'VALID')
+        return tf.complex(res_re, res_im)
+
     def build_graph(self):
         """Init TF graph."""
         with tf.Graph().as_default():
             # Init placeholders and variables
             self.state_placeholder = tf.placeholder(
-                tf.float32, shape=(None, self.n_spins), name='state')
+                tf.float32, shape=[None]+self.n_spins, name='state')
             self.energy_placeholder = tf.placeholder(
-                tf.complex64, shape=(None,), name='energy')
+                tf.complex64, shape=[None], name='energy')
+            batch_size = tf.shape(self.state_placeholder)[0]
+            state_5d = tf.reshape(
+                self.state_placeholder, [batch_size]+self.n_spins_3d+[1])
 
             self.bias_vis = self._complex_var(
                 random_complex([], self.INIT_PARAM_SCALE),
@@ -141,34 +183,20 @@ class ConvCRBM:
                 random_complex([self.alpha], self.INIT_PARAM_SCALE),
                 tf.float32, name='bias_hid')
             self.filters = self._complex_var(
-                random_complex([self.r, self.alpha], self.INIT_PARAM_SCALE),
+                random_complex(self.filter_shape, self.INIT_PARAM_SCALE),
                 tf.float32, name='filters')
 
-            # Make periodic boundary conditions by tiling the space
-            tiled = tf.tile(self.state_placeholder, [1, 3])
-            pad_size = int((self.r-1)/2)
-            padded = tiled[:, self.n_spins-pad_size:-self.n_spins+pad_size]
-            padded_3d = padded[:, None, None, :, None]
-            filters_3d = self.filters[None, None, :, None, :]
-            # As the states are real-valued, we can split the convolution
-            # in 2 parts since TF doesn't support complex convolution
-            filters_3d_re = tf.real(filters_3d)
-            filters_3d_im = tf.imag(filters_3d)
-            theta_re = tf.nn.conv3d(
-                padded_3d,
-                filters_3d_re,
-                (1,)*5, 'VALID')
-            theta_im = tf.nn.conv3d(
-                padded_3d,
-                filters_3d_im,
-                (1,)*5, 'VALID')
-            theta = tf.complex(theta_re, theta_im)
+            theta = self._complex_wrapped_conv(
+                state_5d,
+                self.filters,
+                self.n_dims)
+
             theta += self.bias_hid[None, None, None, None, :]
             A = tf.log(tf.exp(theta)+tf.exp(-theta))
-            self.log_psi = self.bias_vis * tf.reduce_sum(
-                tf.cast(self.state_placeholder, tf.complex64), 1)
+            self.log_psi = self.bias_vis * tf.reduce_sum(  # Bias
+                tf.cast(state_5d, tf.complex64), [1, 2, 3, 4])
             self.log_psi += tf.reduce_sum(A, [1, 2, 3, 4])
-            n = tf.cast(tf.shape(self.state_placeholder)[0], tf.complex64)
+            n = tf.cast(batch_size, tf.complex64)
             energy_avg = tf.reduce_sum(self.energy_placeholder)/n
             log_psi_conj = tf.conj(self.log_psi)
             loss = tf.reduce_sum(

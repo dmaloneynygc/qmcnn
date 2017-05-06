@@ -1,7 +1,7 @@
 """Experiments module."""
 import numpy as np
 from models import CRBM, ConvCRBM
-from systems import Ising1D
+from systems import Ising
 from sampler import Sampler
 from optimizer import Optimizer, TFOptimizer
 
@@ -21,9 +21,9 @@ from optimizer import Optimizer, TFOptimizer
 # optimizer = Optimizer(model, sampler, system)
 # optimizer.optimize(100, 10000)
 
-n_spins = 40
-model = ConvCRBM(n_spins, 4, 39)
-system = Ising1D(1., n_spins, model)
+n_spins = [40]
+model = ConvCRBM(n_spins, 4, 8)
+system = Ising(1., n_spins, model)
 sampler = Sampler(n_spins, model)
 optimizer = TFOptimizer(model, sampler, system)
 optimizer.optimize(100, 1000)

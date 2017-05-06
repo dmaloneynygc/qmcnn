@@ -36,7 +36,8 @@ class Optimizer:
 
             print(("Iteration %d/%d, E=%f (%.2f), w=%.2E delta=%.2E "
                    "(%.2fs, %.2fs, %.2fs)") %
-                  (it, iterations, np.real(np.mean(E)), np.std(E),
+                  (it, iterations, np.real(np.mean(E)),
+                   np.std(E)/np.sqrt(num_samples),
                    np.mean(np.absolute(self.model.params)),
                    np.mean(np.absolute(delta)),
                    time_sample, time_model, time_solve))
@@ -62,7 +63,8 @@ class TFOptimizer:
             self.model.optimize(samples, E)
             time_optimize, start = time()-start, time()
 
-            print(("Iteration %d/%d, E=%f (%.2f), "
+            print(("Iteration %d/%d, E=%f (%.2E), "
                    "(%.2fs, %.2fs, %.2fs)") %
-                  (it, iterations, np.real(np.mean(E)), np.std(E),
+                  (it, iterations, np.real(np.mean(E)),
+                   np.std(E)/np.sqrt(num_samples),
                    time_sample, time_energy, time_optimize))
