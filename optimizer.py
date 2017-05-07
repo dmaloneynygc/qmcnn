@@ -52,11 +52,12 @@ class TFOptimizer:
         self.sampler = sampler
         self.system = system
 
-    def optimize(self, iterations, num_samples):
+    def optimize(self, iterations, train_samples,
+                 eval_freq=None, eval_samples=None):
         """Perform optimization."""
         for it in range(iterations):
             start = time()
-            samples = self.sampler.sample(num_samples)
+            samples = self.sampler.sample(train_samples)
             time_sample, start = time()-start, time()
             E = self.system.local_energy(samples)
             time_energy, start = time()-start, time()
@@ -66,5 +67,17 @@ class TFOptimizer:
             print(("Iteration %d/%d, E=%f (%.2E), "
                    "(%.2fs, %.2fs, %.2fs)") %
                   (it, iterations, np.real(np.mean(E)),
-                   np.std(E)/np.sqrt(num_samples),
+                   np.std(E)/np.sqrt(train_samples),
                    time_sample, time_energy, time_optimize))
+
+            if eval_freq is not None and it % eval_freq == 0:
+                start = time()
+                samples = self.sampler.sample(eval_samples)
+                time_sample, start = time()-start, time()
+                E = self.system.local_energy(samples)
+                time_energy = time()-start
+
+                print(("Evaluation, E=%f (%.2E), "
+                       "(%.2fs, %.2fs)") %
+                      (np.real(np.mean(E)), np.std(E)/np.sqrt(eval_samples),
+                       time_sample, time_energy))
