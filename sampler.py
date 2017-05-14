@@ -61,7 +61,7 @@ class Sampler:
         for _ in range(int(self.THERMFACTOR*self.SWEEPFACTOR*n_sweeps)):
             self.sample_step()
 
-        padded_size = [d+self.model.r-1 for d in self.n_spins]
+        padded_size = [d+(self.model.r-1)*2 for d in self.n_spins]
         samples = np.zeros([num]+padded_size, dtype=np.int8)
 
         self.moves, self.accepted = 0, 0
@@ -70,7 +70,6 @@ class Sampler:
                 self.sample_step()
             n_sample = i*self.N_SAMPLERS
             samples[n_sample:self.N_SAMPLERS+n_sample, ...] = \
-                self.model.unpad(self.sample_states_padded)
-        # print(self.accepted / self.moves)
+                self.sample_states_padded
 
         return samples

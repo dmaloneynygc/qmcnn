@@ -61,7 +61,7 @@ class TFOptimizer:
             time_sample, start = time()-start, time()
             E = self.system.local_energy(samples)
             time_energy, start = time()-start, time()
-            self.model.optimize(samples, E)
+            self.model.optimize(self.model.unpad(samples, 'half'), E)
             time_optimize, start = time()-start, time()
 
             print(("Iteration %d/%d, E=%f (%.2E), "

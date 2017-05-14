@@ -85,7 +85,7 @@ class ConvCRBM:
     """
 
     INIT_PARAM_SCALE = 1E-2
-    MAX_BATCH_SIZE = 10000
+    MAX_BATCH_SIZE = 1000
 
     def __init__(self, n_spins, alpha, r):
         """Initialise.
@@ -112,10 +112,10 @@ class ConvCRBM:
             batch = X[i*self.MAX_BATCH_SIZE:(i+1)*self.MAX_BATCH_SIZE]
             res = fn(batch)
             results.append(res)
-        return np.hstack(results)
+        return np.concatenate(results)
 
     def forward(self, states):
-        """Compute log of wavefn for batch of spin states."""
+        """Compute log of wavefn for batch of half-pad spin states."""
         return self._batch(
             lambda batch: self.session.run(self.log_psi, feed_dict={
                 self.state_placeholder: batch}),
@@ -123,7 +123,11 @@ class ConvCRBM:
         )
 
     def forward_factors(self, states):
-        """Compute log factors for one or more spin states."""
+        """Compute log factors for batch of spin states.
+
+        If spin states full-pad, factors half-pad.
+        If spin states half-pad, factors unpad.
+        """
         result = self._batch(
             lambda batch: self.session.run(self.factors, feed_dict={
                 self.state_placeholder: batch}),
@@ -132,7 +136,7 @@ class ConvCRBM:
         return np.squeeze(result, list(range(self.n_dims+1, 4)))
 
     def optimize(self, states, energies):
-        """Perform one optimization step."""
+        """Perform one optimization step on half-pad states."""
         _, sums = self.session.run([self.train_op, self.summaries], feed_dict={
             self.state_placeholder: states,
             self.energy_placeholder: energies})
@@ -159,17 +163,15 @@ class ConvCRBM:
 
         return np.pad(states, [(0, 0)]+[(s, s)]*self.n_dims, 'wrap')
 
-    def unpad(self, states):
-        """Remove a half-pad."""
-        s, d = (self.r-1)//2, self.n_dims
-        if d == 1:
-            return states[:, s:-s]
-        elif d == 2:
-            return states[:, s:-s, s:-s]
-        elif d == 3:
-            return states[:, s:-s, s:-s, s:-s]
+    def unpad(self, states, mode):
+        """Remove a half-pad or full-pad."""
+        if mode == 'full':
+            s = self.r-1
+        elif mode == 'half':
+            s = (self.r-1)//2
         else:
-            raise ValueError('Dimension not supported')
+            raise ValueError('Padding mode not supported')
+        return states[(Ellipsis,)+(slice(s, -s),)*self.n_dims]
 
     def build_graph(self):
         """Init TF graph."""
@@ -231,7 +233,7 @@ class ConvCRBM:
             loss -= energy_avg * tf.reduce_sum(log_psi_conj, 0)/n
             self.loss = tf.real(loss)
 
-            optimizer = tf.train.AdamOptimizer(1E-2)
+            optimizer = tf.train.AdamOptimizer(3E-3)
             self.train_op = optimizer.minimize(self.loss)
 
             energy_mean, energy_var = tf.nn.moments(
