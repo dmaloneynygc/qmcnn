@@ -139,10 +139,19 @@ class ConvCRBM:
 
     def optimize(self, states, energies):
         """Perform one optimization step on half-pad states."""
-        _, sums = self.session.run([self.train_op, self.summaries], feed_dict={
-            self.state_placeholder: states,
-            self.energy_placeholder: energies})
-        self.writer.add_summary(sums)
+        batch_size = self.OPTIMIZE_BATCH_SIZE
+        n = states.shape[0]
+        num_its = int(np.ceil(n/batch_size))
+        for i in range(num_its):
+            states_batch = states[i*batch_size:(i+1)*batch_size]
+            energies_batch = energies[i*batch_size:(i+1)*batch_size]
+            if i == num_its-1:
+                op = [self.accumulate_gradients, self.train_op, self.reset_op]
+            else:
+                op = [self.accumulate_gradients]
+            self.session.run(op, feed_dict={
+                self.state_placeholder: states_batch,
+                self.energy_placeholder: energies_batch})
 
     def _complex_var(self, value, dtype, name=None):
         """Create complex variable out of 2 reals."""
@@ -238,12 +247,37 @@ class ConvCRBM:
             optimizer = tf.train.AdamOptimizer(3E-3)
             self.train_op = optimizer.minimize(self.loss)
 
+            self.session = tf.Session()
+            self.session.run(tf.global_variables_initializer())
+
+            vars = tf.trainable_variables()
+            vars_zeros = []
+            grad_accums = []
+            for v in vars:
+                shape = self.session.run(tf.shape(v))
+                zeros = np.zeros(shape)
+                vars_zeros.append(zeros)
+                grad_accums.append(tf.Variable(
+                    zeros, trainable=False, dtype=v.dtype.base_dtype))
+
+            gradients = optimizer.compute_gradients(self.loss, vars)
+            for i, (grad, var) in enumerate(gradients):
+                grad_accums[i] = tf.assign_add(grad_accums[i], grad)
+            self.accumulate_gradients = grad_accums
+
+            with tf.control_dependencies(grad_accums):
+                self.train_op = optimizer.apply_gradients(
+                    list(zip(grad_accums, vars)))
+                with tf.control_dependencies([self.train_op]):
+                    reset_ops = []
+                    for i, acc in enumerate(grad_accums):
+                        reset_ops.append(tf.assign(acc, vars_zeros[i]))
+                    self.reset_op = reset_ops
+
+            self.session.run(tf.global_variables_initializer())
             energy_mean, energy_var = tf.nn.moments(
                 tf.real(self.energy_placeholder), [0])
             tf.summary.scalar('energy_mean', energy_mean)
             tf.summary.scalar('energy_var', energy_var)
             tf.summary.scalar('loss', self.loss)
             self.summaries = tf.summary.merge_all()
-
-            self.session = tf.Session()
-            self.session.run(tf.global_variables_initializer())
