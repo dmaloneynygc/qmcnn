@@ -25,10 +25,6 @@ class Optimizer:
             F = np.dot(O_conj.T, E) / num_samples
             F -= np.mean(E, axis=0)*np.mean(O_conj, axis=0)
             time_model, start = time()-start, time()
-
-            # S = np.dot(O_conj.T, O)/num_samples - \
-            #     np.outer(O_conj.mean(axis=0), O.mean(axis=0))
-            # delta = -1E-3 * np.dot(np.linalg.pinv(S), F)
             delta = -1 * F
 
             self.model.set_params(self.model.params + delta)
@@ -59,7 +55,8 @@ class TFOptimizer:
             start = time()
             samples = self.sampler.sample(train_samples)
             time_sample, start = time()-start, time()
-            E = self.system.local_energy(samples)
+            E = self.model.batch(self.system.local_energy, samples,
+                                 self.model.ENERGY_BATCH_SIZE)
             time_energy, start = time()-start, time()
             self.model.optimize(self.model.unpad(samples, 'half'), E)
             time_optimize, start = time()-start, time()

@@ -68,7 +68,7 @@ def flip_wrapped_1d(np.ndarray[np.int8_t, ndim=2] source,
             if 0 <= x and x < source.shape[1]:
                 source[n, x] *= -1
 
-# # @cython.boundscheck(False)
+# @cython.boundscheck(False)
 @cython.wraparound(False)
 def flip_wrapped_2d(np.ndarray[np.int8_t, ndim=3] source,
                      np.ndarray[np.int_t, ndim=1] pad_size,
@@ -118,7 +118,6 @@ def flip_wrapped_3d(np.ndarray[np.int8_t, ndim=4] source,
 
 
 # @cython.boundscheck(False)
-# @cython.boundcheck(False)
 @cython.wraparound(False)
 def replace_wrapped_1d(np.ndarray[numeric, ndim=2] old,
                         np.ndarray[numeric, ndim=2] replacement,
@@ -284,7 +283,7 @@ def window_3d(np.ndarray[numeric, ndim=4] source,
     return out
 
 
-@cython.boundscheck(False)
+# @cython.boundscheck(False)
 @cython.wraparound(False)
 def all_windows_1d(np.ndarray[numeric, ndim=2] source,
                    np.ndarray[np.int_t, ndim=1] window_size):
@@ -306,7 +305,7 @@ def all_windows_1d(np.ndarray[numeric, ndim=2] source,
     return out
 
 
-@cython.boundscheck(False)
+# @cython.boundscheck(False)
 @cython.wraparound(False)
 def all_windows_2d(np.ndarray[numeric, ndim=3] source,
                    np.ndarray[np.int_t, ndim=1] window_size):
@@ -334,7 +333,7 @@ def all_windows_2d(np.ndarray[numeric, ndim=3] source,
     return out
 
 
-@cython.boundscheck(False)
+# @cython.boundscheck(False)
 @cython.wraparound(False)
 def all_windows_3d(np.ndarray[numeric, ndim=4] source,
                    np.ndarray[np.int_t, ndim=1] window_size):

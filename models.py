@@ -85,7 +85,9 @@ class ConvCRBM:
     """
 
     INIT_PARAM_SCALE = 1E-2
-    MAX_BATCH_SIZE = 1000
+    FORWARD_BATCH_SIZE = 1000
+    ENERGY_BATCH_SIZE = 1000
+    OPTIMIZE_BATCH_SIZE = 1000
 
     def __init__(self, n_spins, alpha, r):
         """Initialise.
@@ -103,23 +105,23 @@ class ConvCRBM:
         self.build_graph()
         self.writer = tf.summary.FileWriter('./logs', self.session.graph)
 
-    def _batch(self, fn, X):
+    def batch(self, fn, X, batch_size):
         """Create mini-batches from X."""
         n = X.shape[0]
         results = []
-        num_its = int(np.ceil(n/self.MAX_BATCH_SIZE))
+        num_its = int(np.ceil(n/batch_size))
         for i in range(num_its):
-            batch = X[i*self.MAX_BATCH_SIZE:(i+1)*self.MAX_BATCH_SIZE]
+            batch = X[i*batch_size:(i+1)*batch_size]
             res = fn(batch)
             results.append(res)
         return np.concatenate(results)
 
     def forward(self, states):
         """Compute log of wavefn for batch of half-pad spin states."""
-        return self._batch(
+        return self.batch(
             lambda batch: self.session.run(self.log_psi, feed_dict={
                 self.state_placeholder: batch}),
-            states
+            states, self.FORWARD_BATCH_SIZE
         )
 
     def forward_factors(self, states):
@@ -128,10 +130,10 @@ class ConvCRBM:
         If spin states full-pad, factors half-pad.
         If spin states half-pad, factors unpad.
         """
-        result = self._batch(
+        result = self.batch(
             lambda batch: self.session.run(self.factors, feed_dict={
                 self.state_placeholder: batch}),
-            states
+            states, self.FORWARD_BATCH_SIZE
         )
         return np.squeeze(result, list(range(self.n_dims+1, 4)))
 
