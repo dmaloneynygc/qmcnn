@@ -12,18 +12,85 @@ n = np.prod(shape)
 n_window = np.prod(window_shape)
 data = np.arange(n, dtype=np.int32).reshape(shape)
 data_flattened = data.flatten()
-index_matrix = tf.constant(create_index_matrix(shape, window_shape))
+index_matrix = tf.constant(create_index_matrix(shape, window_shape),
+                           dtype=tf.int32)
 
 centers = [0, 5, 15]
 batch_size = len(centers)
 datas = data_flattened[None, :] + np.arange(batch_size)[:, None] * 100
+datas = tf.constant(datas, np.int32)
 
 # %% Select a window from each batch
 window_range = tf.constant(
     np.outer(np.arange(batch_size), np.ones(n_window)), dtype=tf.int32)
 indices = tf.stack((window_range, tf.gather(index_matrix, centers)), 2)
-sess.run(tf.gather_nd(datas, indices))
+sess.run(tf.gather_nd(datas, indices)).reshape((batch_size,)+window_shape)
 
 # %% All windows
 datas_t = tf.transpose(datas)
-sess.run(tf.transpose(tf.gather_nd(datas_t, tf.expand_dims(index_matrix, 2)), [2, 0, 1]))
+sess.run(tf.transpose(tf.gather_nd(datas_t, tf.expand_dims(index_matrix, 2)),
+                      [2, 0, 1])).reshape((batch_size, n)+window_shape)
+
+# %% Update windows
+window_range = tf.constant(
+    np.outer(np.arange(batch_size), np.ones(n_window)), dtype=tf.int32)
+indices = tf.stack((window_range, tf.gather(index_matrix, centers)), 2)
+windows = tf.gather_nd(datas, indices)
+datas_var = tf.Variable(datas)
+datas_var = tf.scatter_nd_update(datas_var, indices, -windows)
+sess.run(tf.global_variables_initializer())
+sess.run(datas_var).reshape((batch_size,)+shape)
+
+# %% Conditional update
+window_range = tf.constant(
+    np.outer(np.arange(batch_size), np.ones(n_window)), dtype=tf.int32)
+indices = tf.stack((window_range, tf.gather(index_matrix, centers)), 2)
+windows = tf.gather_nd(datas, indices)
+datas_var = tf.Variable(datas)
+mask = tf.reduce_sum(windows, 1) > 1000
+datas_var = tf.scatter_nd_update(
+    datas_var, tf.boolean_mask(indices, mask), -tf.boolean_mask(windows, mask))
+sess.run(tf.global_variables_initializer())
+sess.run(datas_var).reshape((batch_size,)+shape)
+
+# %% Spinflip
+window_range = tf.constant(
+    np.outer(np.arange(batch_size), np.ones(n_window)), dtype=tf.int32)
+indices = tf.stack((window_range, tf.gather(index_matrix, centers)), 2)
+windows = tf.cast(tf.gather_nd(datas, indices), tf.int32)
+flipper = np.ones(n_window, dtype=np.int32)
+flipper[(n_window-1)/2] = -1
+flipper = tf.constant(flipper)
+sess.run(windows * flipper).reshape((batch_size,)+window_shape)
+
+
+# %% Loop of flips
+sess = tf.Session()
+with tf.variable_scope('iteration'):
+    datas_var = tf.get_variable(
+        'datas_var', initializer=datas, trainable=False)
+sess.run(tf.global_variables_initializer())
+num_its = 3
+centers = tf.random_uniform([num_its, batch_size], 0, n, dtype=tf.int32)
+
+
+def body(i):
+    """Loop body."""
+    indices = tf.stack((np.arange(batch_size), centers[i]), 1)
+    with tf.variable_scope('iteration', reuse=True):
+        datas_var = tf.get_variable('datas_var', dtype=np.int32)
+    assign_op = tf.scatter_nd_update(datas_var, indices, -np.ones(batch_size))
+    with tf.control_dependencies([assign_op]):
+        return i+1
+
+
+loop = tf.while_loop(
+    lambda i: i < num_its,
+    body,
+    [tf.constant(0)],
+    parallel_iterations=1,
+    back_prop=False
+)
+a, _, b = sess.run([centers, loop, datas_var])
+print(a.T)
+print(b)

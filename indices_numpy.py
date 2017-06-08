@@ -14,7 +14,7 @@ def create_index_matrix(data_shape, window_shape):
     n_window = np.prod(window_shape)
     box = np.indices(window_shape)
     index_matrix = np.zeros((n_data, n_window), dtype=np.int32)
-    shifts = np.unravel_index(np.arange(n_data), shape)
+    shifts = np.unravel_index(np.arange(n_data), data_shape)
     offset = (np.array(window_shape)-1)/2
     for i, shift in enumerate(zip(*shifts)):
         shift = np.array(shift)-offset
