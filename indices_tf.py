@@ -8,6 +8,7 @@ sess = tf.Session()
 
 shape = (4, 4)
 window_shape = (3, 3)
+n_dims = len(shape)
 n = np.prod(shape)
 n_window = np.prod(window_shape)
 data = np.arange(n, dtype=np.int32).reshape(shape)
@@ -91,6 +92,20 @@ loop = tf.while_loop(
     parallel_iterations=1,
     back_prop=False
 )
-a, _, b = sess.run([centers, loop, datas_var])
-print(a.T)
-print(b)
+sess.run([centers, loop, datas_var])
+
+# %% alignedness
+shape = (3, 3)
+n_dims = len(shape)
+n = np.prod(shape)
+datas = tf.random_uniform([batch_size, n], 0, 2, dtype=tf.int32)*2-1
+indices = np.arange(n).reshape(shape)
+interactions = []
+for i in range(n_dims):
+    shifter = np.roll(indices, 1, i)
+    shifted = tf.transpose(tf.gather(tf.transpose(datas), shifter.flatten()))
+    interactions.append(tf.reduce_sum(datas * shifted, 1))
+alignedness = tf.reduce_sum(tf.stack(interactions, 1), 1)
+d, a = sess.run([datas, alignedness])
+print(d.reshape((batch_size,)+shape))
+print(a)
