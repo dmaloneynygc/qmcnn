@@ -5,9 +5,9 @@ from indices_numpy import create_index_matrix
 
 tf.reset_default_graph()
 
-K = 9
-ALPHA = 2
-SCALE = 1E-3
+K = 25
+ALPHA = 4
+SCALE = 1E-2
 SYSTEM_SHAPE = (40,)
 N_DIMS = len(SYSTEM_SHAPE)
 NUM_SPINS = np.prod(SYSTEM_SHAPE)
@@ -15,7 +15,7 @@ FULL_WINDOW_SHAPE = (K*2-1,)*N_DIMS
 FULL_WINDOW_SIZE = np.prod(FULL_WINDOW_SHAPE)
 HALF_WINDOW_SHAPE = (K,)*N_DIMS
 HALF_WINDOW_SIZE = np.prod(HALF_WINDOW_SHAPE)
-BATCH_SIZE = 100
+BATCH_SIZE = 1000
 H = 1.0
 
 
@@ -62,13 +62,13 @@ def create_vars():
     with tf.variable_scope("factors"):
         tf.get_variable(
             "filters", shape=[K]*N_DIMS+[1]+[2*ALPHA],
-            initializer=tf.random_normal_initializer(SCALE))
+            initializer=tf.random_normal_initializer(0., SCALE))
         tf.get_variable(
             "bias_vis", shape=[2],
-            initializer=tf.random_normal_initializer(SCALE))
+            initializer=tf.random_normal_initializer(0., SCALE))
         tf.get_variable(
             "bias_hid", shape=[2*ALPHA],
-            initializer=tf.random_normal_initializer(SCALE))
+            initializer=tf.random_normal_initializer(0., SCALE))
 
 
 def factors_op(x):
@@ -106,8 +106,8 @@ def loss_op(factors, energies):
 
 def energy_op(states):
     """Compute local energy of states."""
-    states_shaped = pad(tf.reshape(states, (BATCH_SIZE,)+SYSTEM_SHAPE), K-1)
-    factors = tf.reshape(factors_op(states_shaped), (BATCH_SIZE, -1))
+    states_shaped = tf.reshape(states, (BATCH_SIZE,)+SYSTEM_SHAPE)
+    factors = tf.reshape(factors_op(pad(states_shaped, K-1)), (BATCH_SIZE, -1))
     factor_windows = all_windows(factors, HALF_WINDOW_SHAPE)
     spin_windows = all_windows(states, FULL_WINDOW_SHAPE)
     flipper = np.ones(FULL_WINDOW_SIZE, dtype=np.int8)
@@ -131,4 +131,5 @@ with tf.Graph().as_default(), tf.Session() as sess:
     x = tf.random_uniform((BATCH_SIZE, NUM_SPINS), 0, 2, dtype=tf.int32)*2-1
     x = tf.cast(x, tf.int8)
     op = energy_op(x)
+    # op = factors_op(x)
     print(sess.run(op).mean())
