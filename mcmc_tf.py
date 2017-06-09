@@ -1,4 +1,5 @@
 """Test module."""
+from __future__ import division
 import tensorflow as tf
 import numpy as np
 from indices_numpy import create_index_matrix
@@ -8,7 +9,7 @@ tf.reset_default_graph()
 K = 25
 ALPHA = 4
 SCALE = 1E-2
-SYSTEM_SHAPE = (40,)
+SYSTEM_SHAPE = (20,)
 N_DIMS = len(SYSTEM_SHAPE)
 NUM_SPINS = np.prod(SYSTEM_SHAPE)
 FULL_WINDOW_SHAPE = (K*2-1,)*N_DIMS
@@ -17,6 +18,15 @@ HALF_WINDOW_SHAPE = (K,)*N_DIMS
 HALF_WINDOW_SIZE = np.prod(HALF_WINDOW_SHAPE)
 BATCH_SIZE = 1000
 H = 1.0
+
+# NUM_SAMPLES = 4
+# NUM_SAMPLERS = 2
+NUM_SAMPLES = 10000
+NUM_SAMPLERS = 1000
+ITS_PER_SAMPLE = NUM_SPINS
+SAMPLES_PER_SAMPLER = NUM_SAMPLES // NUM_SAMPLERS
+THERM_ITS = SAMPLES_PER_SAMPLER // 2
+TOTAL_ITS = THERM_ITS + (SAMPLES_PER_SAMPLER-1) * ITS_PER_SAMPLE + 1
 
 
 def unpad(x, pad_size):
@@ -70,6 +80,23 @@ def create_vars():
             "bias_hid", shape=[2*ALPHA],
             initializer=tf.random_normal_initializer(0., SCALE))
 
+    with tf.variable_scope("sampler"):
+        tf.get_variable("current_samples",
+                        shape=[NUM_SAMPLERS, NUM_SPINS],
+                        initializer=tf.constant_initializer(0),
+                        dtype=tf.int8, trainable=False)
+        tf.get_variable("current_factors",
+                        shape=[NUM_SAMPLERS, NUM_SPINS],
+                        initializer=tf.constant_initializer(0),
+                        dtype=tf.complex64, trainable=False)
+        tf.get_variable("samples",
+                        shape=[SAMPLES_PER_SAMPLER, NUM_SAMPLERS, NUM_SPINS],
+                        initializer=tf.constant_initializer(0),
+                        dtype=tf.int8, trainable=False)
+        tf.get_variable("flip_positions", shape=[TOTAL_ITS, NUM_SAMPLERS],
+                        initializer=tf.constant_initializer(0),
+                        dtype=tf.int32, trainable=False)
+
 
 def factors_op(x):
     """Compute model factors."""
@@ -79,7 +106,7 @@ def factors_op(x):
         bias_hid = tf.get_variable("bias_hid")
 
     x_float = tf.cast(x, tf.float32)
-    x_unpad = unpad(x_float, (K-1)/2)
+    x_unpad = unpad(x_float, (K-1)//2)
     x_expanded = x_float[..., None]
 
     if N_DIMS == 1:
@@ -111,7 +138,7 @@ def energy_op(states):
     factor_windows = all_windows(factors, HALF_WINDOW_SHAPE)
     spin_windows = all_windows(states, FULL_WINDOW_SHAPE)
     flipper = np.ones(FULL_WINDOW_SIZE, dtype=np.int8)
-    flipper[(FULL_WINDOW_SIZE-1)/2] = -1
+    flipper[(FULL_WINDOW_SIZE-1)//2] = -1
     spins_flipped = spin_windows * flipper
     factors_flipped = tf.reshape(
         factors_op(tf.reshape(
@@ -124,12 +151,88 @@ def energy_op(states):
     return energy / NUM_SPINS
 
 
+def mcmc_reset():
+    """Reset MCMC variables."""
+    with tf.variable_scope('sampler', reuse=True):
+        current_samples = tf.get_variable('current_samples', dtype=tf.int8)
+        current_factors = tf.get_variable('current_factors',
+                                          dtype=tf.complex64)
+        samples = tf.get_variable('samples', dtype=tf.int8)
+        flip_positions = tf.get_variable('flip_positions', dtype=tf.int32)
+
+    states = tf.random_uniform(
+        [NUM_SAMPLERS, NUM_SPINS], 0, 2, dtype=tf.int32)*2-1
+    states = tf.cast(states, tf.int8)
+    states_shaped = tf.reshape(states, (NUM_SAMPLERS,)+SYSTEM_SHAPE)
+    factors = tf.reshape(
+        factors_op(pad(states_shaped, (K-1)//2)),
+        (NUM_SAMPLERS, -1))
+
+    return tf.group(
+        tf.assign(current_samples, states),
+        tf.assign(current_factors, factors),
+        tf.assign(samples, tf.zeros_like(samples, dtype=samples.dtype)),
+        tf.assign(flip_positions, tf.random_uniform(
+            [TOTAL_ITS, NUM_SAMPLERS], 0, NUM_SPINS, dtype=tf.int32)),
+    )
+
+
+def mcmc_step(i):
+    """Do MCMC Step."""
+    with tf.variable_scope('sampler', reuse=True):
+        current_samples = tf.get_variable('current_samples', dtype=tf.int8)
+        current_factors = tf.get_variable('current_factors',
+                                          dtype=tf.complex64)
+        samples = tf.get_variable('samples', dtype=tf.int8)
+        flip_positions = tf.get_variable('flip_positions', dtype=tf.int32)
+
+    centers = flip_positions[i]
+    setter = tf.cast(np.ones(NUM_SAMPLERS) * i, tf.int8)
+    indices = tf.stack((np.arange(NUM_SAMPLERS), centers), 1)
+    current_samples = tf.scatter_nd_update(current_samples, indices, setter)
+
+    def write_samples():
+        """Write current_samples to samples."""
+        with tf.variable_scope('sampler', reuse=True):
+            current_samples = tf.get_variable('current_samples', dtype=tf.int8)
+            samples = tf.get_variable('samples', dtype=tf.int8)
+        j = (i - THERM_ITS)//ITS_PER_SAMPLE
+        return tf.scatter_update(samples, j, current_samples)
+
+    with tf.control_dependencies([current_samples]):
+        write_op = tf.cond(
+            tf.logical_and(
+                tf.greater_equal(i, THERM_ITS),
+                tf.equal((i - THERM_ITS) % ITS_PER_SAMPLE, 0)),
+            write_samples, lambda: samples)
+
+    with tf.control_dependencies([write_op]):
+        return i+1
+
+
+def mcmc_op():
+    """Get MCMC Samples."""
+    with tf.control_dependencies([mcmc_reset()]):
+        loop = tf.while_loop(
+            lambda i: i < TOTAL_ITS,
+            mcmc_step,
+            [tf.constant(0)],
+            parallel_iterations=1,
+            back_prop=False
+        )
+    # with tf.control_dependencies([mcmc_reset()]):
+    with tf.control_dependencies([loop]):
+        with tf.variable_scope('sampler', reuse=True):
+            samples = tf.get_variable('samples', dtype=tf.int8)
+        return tf.identity(samples)
+
+
 with tf.Graph().as_default(), tf.Session() as sess:
     create_vars()
     sess.run(tf.global_variables_initializer())
 
-    x = tf.random_uniform((BATCH_SIZE, NUM_SPINS), 0, 2, dtype=tf.int32)*2-1
-    x = tf.cast(x, tf.int8)
-    op = energy_op(x)
+    # x = tf.random_uniform((BATCH_SIZE, NUM_SPINS), 0, 2, dtype=tf.int32)*2-1
+    # x = tf.cast(x, tf.int8)
     # op = factors_op(x)
-    print(sess.run(op).mean())
+    op = mcmc_op()
+    print(sess.run(op))
