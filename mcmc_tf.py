@@ -3,11 +3,12 @@ from __future__ import division
 import tensorflow as tf
 import numpy as np
 import functools
+from time import time
 
 
 tf.reset_default_graph()
 
-LEARNING_RATE = 1E-1
+LEARNING_RATE = 3E-3
 K = 5
 ALPHA = 4
 SCALE = 1E-2
@@ -20,13 +21,11 @@ HALF_WINDOW_SHAPE = (K,)*N_DIMS
 HALF_WINDOW_SIZE = np.prod(HALF_WINDOW_SHAPE)
 H = 1.0
 
-# NUM_SAMPLES = 4
-# NUM_SAMPLERS = 2
-NUM_SAMPLES = 10000
-NUM_SAMPLERS = 1000
+NUM_SAMPLES = 100000
+NUM_SAMPLERS = 10000
 ITS_PER_SAMPLE = NUM_SPINS
 SAMPLES_PER_SAMPLER = NUM_SAMPLES // NUM_SAMPLERS
-THERM_ITS = SAMPLES_PER_SAMPLER // 2
+THERM_ITS = SAMPLES_PER_SAMPLER
 SAMPLE_ITS = THERM_ITS + (SAMPLES_PER_SAMPLER-1) * ITS_PER_SAMPLE + 1
 OPTIMIZATION_ITS = 10000
 
@@ -186,8 +185,7 @@ def factors_op(x):
 @scope_op()
 def loss_op(factors, energies):
     """Compute loss."""
-    batch_size = tf.shape(factors)[0]
-    n = tf.cast(batch_size, tf.complex64)
+    n = tf.cast(tf.shape(factors)[0], tf.complex64)
     energies = tf.cast(energies, tf.complex64)
     log_psi = tf.reduce_sum(factors, range(1, N_DIMS+1))
     log_psi_conj = tf.conj(log_psi)
@@ -202,7 +200,8 @@ def energy_op(states):
     """Compute local energy of states."""
     batch_size = tf.shape(states)[0]
     states_shaped = tf.reshape(states, (batch_size,)+SYSTEM_SHAPE)
-    factors = tf.reshape(factors_op(pad(states_shaped, K-1)), (batch_size, -1))
+    factors = tf.reshape(factors_op(pad(states_shaped, (K-1)//2)),
+                         (batch_size, -1))
     factor_windows = all_windows(factors, HALF_WINDOW_SHAPE)
     spin_windows = all_windows(states, FULL_WINDOW_SHAPE)
     flipper = np.ones(FULL_WINDOW_SIZE, dtype=np.int8)
@@ -211,7 +210,7 @@ def energy_op(states):
     factors_flipped = tf.reshape(
         factors_op(tf.reshape(
             spins_flipped, (batch_size*NUM_SPINS,)+FULL_WINDOW_SHAPE)),
-        (batch_size, NUM_SPINS, -1))
+        (batch_size, NUM_SPINS, HALF_WINDOW_SIZE))
 
     log_pop = tf.reduce_sum(factors_flipped - factor_windows, 2)
     energy = -H * tf.reduce_sum(tf.exp(log_pop), 1) - \
@@ -326,9 +325,9 @@ def optimize_op():
     energies = tf.stop_gradient(energy_op(samples))
     loss = loss_op(factors_op(samples_shaped), energies)
     # optimizer = tf.train.GradientDescentOptimizer(LEARNING_RATE)
-    optimizer = tf.train.AdamOptimizer(1E-3)
+    optimizer = tf.train.AdamOptimizer(LEARNING_RATE)
 
-    return energies, optimizer.minimize(loss), [tf.shape(samples_shaped), tf.shape(factors_op(samples_shaped))]
+    return energies, optimizer.minimize(loss)
 
 
 with tf.Graph().as_default(), tf.Session() as sess:
@@ -336,13 +335,11 @@ with tf.Graph().as_default(), tf.Session() as sess:
     op = optimize_op()
     sess.run(tf.global_variables_initializer())
 
-    # x = tf.random_uniform((BATCH_SIZE, NUM_SPINS), 0, 2, dtype=tf.int32)*2-1
-    # x = tf.cast(x, tf.int8)
-    from time import time
-    for it in range(1 or OPTIMIZATION_ITS):
+    # writer = tf.summary.FileWriter('./logs', sess.graph)
+    for it in range(OPTIMIZATION_ITS):
         start = time()
-        e, _, d = sess.run(op)
-        print(d)
+        e, _ = sess.run(op)
         e = np.real(e)
         print("It %d, E=%.5f (%.2e) %.1fs" %
-              (it+1, e.mean(), e.std(), time()-start))
+              (it+1, e.mean(), e.std()/np.sqrt(NUM_SAMPLES), time()-start))
+    # writer.flush()
