@@ -21,8 +21,8 @@ HALF_WINDOW_SHAPE = (K,)*N_DIMS
 HALF_WINDOW_SIZE = np.prod(HALF_WINDOW_SHAPE)
 H = 1.0
 
-NUM_SAMPLES = 100000
-NUM_SAMPLERS = 10000
+NUM_SAMPLES = 10000
+NUM_SAMPLERS = 1000
 ITS_PER_SAMPLE = NUM_SPINS
 SAMPLES_PER_SAMPLER = NUM_SAMPLES // NUM_SAMPLERS
 THERM_ITS = SAMPLES_PER_SAMPLER
@@ -129,20 +129,20 @@ def create_vars():
     """Add vars to graph."""
     with tf.variable_scope("factors"):
         tf.get_variable(
-            "filters", shape=[K]*N_DIMS+[1]+[2*ALPHA],
+            "filters", shape=[K]*N_DIMS+[1]+[2*ALPHA], dtype=tf.float32,
             initializer=tf.random_normal_initializer(0., SCALE))
         tf.get_variable(
-            "bias_vis", shape=[2],
+            "bias_vis", shape=[2], dtype=tf.float32,
             initializer=tf.random_normal_initializer(0., SCALE))
         tf.get_variable(
-            "bias_hid", shape=[2*ALPHA],
+            "bias_hid", shape=[2*ALPHA], dtype=tf.float32,
             initializer=tf.random_normal_initializer(0., SCALE))
 
     with tf.variable_scope("sampler"):
         tf.get_variable("current_samples",
                         shape=[NUM_SAMPLERS, NUM_SPINS],
                         initializer=tf.constant_initializer(0),
-                        dtype=tf.int8, trainable=False)
+                        dtype=tf.int32, trainable=False)
         tf.get_variable("current_factors",
                         shape=[NUM_SAMPLERS, NUM_SPINS],
                         initializer=tf.constant_initializer(0),
@@ -150,7 +150,7 @@ def create_vars():
         tf.get_variable("samples",
                         shape=[SAMPLES_PER_SAMPLER, NUM_SAMPLERS, NUM_SPINS],
                         initializer=tf.constant_initializer(0),
-                        dtype=tf.int8, trainable=False)
+                        dtype=tf.int32, trainable=False)
         tf.get_variable("flip_positions", shape=[SAMPLE_ITS, NUM_SAMPLERS],
                         initializer=tf.constant_initializer(0),
                         dtype=tf.int32, trainable=False)
@@ -204,7 +204,7 @@ def energy_op(states):
                          (batch_size, -1))
     factor_windows = all_windows(factors, HALF_WINDOW_SHAPE)
     spin_windows = all_windows(states, FULL_WINDOW_SHAPE)
-    flipper = np.ones(FULL_WINDOW_SIZE, dtype=np.int8)
+    flipper = np.ones(FULL_WINDOW_SIZE, dtype=np.int32)
     flipper[(FULL_WINDOW_SIZE-1)//2] = -1
     spins_flipped = spin_windows * flipper
     factors_flipped = tf.reshape(
@@ -222,20 +222,22 @@ def energy_op(states):
 def mcmc_reset():
     """Reset MCMC variables."""
     with tf.variable_scope('sampler', reuse=True):
-        current_samples = tf.get_variable('current_samples', dtype=tf.int8)
+        current_samples = tf.get_variable('current_samples', dtype=tf.int32)
         current_factors = tf.get_variable('current_factors',
                                           dtype=tf.complex64)
-        samples = tf.get_variable('samples', dtype=tf.int8)
+        samples = tf.get_variable('samples', dtype=tf.int32)
         flip_positions = tf.get_variable('flip_positions', dtype=tf.int32)
         accept_sample = tf.get_variable('accept_sample', dtype=tf.float32)
 
     states = tf.random_uniform(
         [NUM_SAMPLERS, NUM_SPINS], 0, 2, dtype=tf.int32)*2-1
-    states = tf.cast(states, tf.int8)
+    states = tf.cast(states, tf.int32)
     states_shaped = tf.reshape(states, (NUM_SAMPLERS,)+SYSTEM_SHAPE)
     factors = tf.reshape(
         factors_op(pad(states_shaped, (K-1)//2)),
         (NUM_SAMPLERS, -1))
+
+    # states = tf.Print(states, [states], message="RESET")
 
     return tf.group(
         tf.assign(current_samples, states),
@@ -252,14 +254,17 @@ def mcmc_reset():
 def mcmc_step(i):
     """Do MCMC Step."""
     with tf.variable_scope('sampler', reuse=True):
-        current_samples = tf.get_variable('current_samples', dtype=tf.int8)
+        current_samples = tf.get_variable('current_samples', dtype=tf.int32)
         current_factors = tf.get_variable(
             'current_factors', dtype=tf.complex64)
-        samples = tf.get_variable('samples', dtype=tf.int8)
+        samples = tf.get_variable('samples', dtype=tf.int32)
         flip_positions = tf.get_variable('flip_positions', dtype=tf.int32)
         accept_sample = tf.get_variable('accept_sample', dtype=tf.float32)
 
     centers = flip_positions[i]
+
+    # centers = tf.Print(centers, [i, current_samples])
+
     spin_windows = gather_windows(
         current_samples, centers, FULL_WINDOW_SHAPE)
     factor_windows = gather_windows(
@@ -283,8 +288,8 @@ def mcmc_step(i):
     def write_samples():
         """Write current_samples to samples."""
         with tf.variable_scope('sampler', reuse=True):
-            current_samples = tf.get_variable('current_samples', dtype=tf.int8)
-            samples = tf.get_variable('samples', dtype=tf.int8)
+            current_samples = tf.get_variable('current_samples', dtype=tf.int32)
+            samples = tf.get_variable('samples', dtype=tf.int32)
         j = (i - THERM_ITS)//ITS_PER_SAMPLE
         return tf.scatter_update(samples, j, current_samples)
 
@@ -312,7 +317,7 @@ def mcmc_op():
         )
     with tf.control_dependencies([loop]):
         with tf.variable_scope('sampler', reuse=True):
-            samples = tf.get_variable('samples', dtype=tf.int8)
+            samples = tf.get_variable('samples', dtype=tf.int32)
         return tf.reshape(samples, [NUM_SAMPLES, NUM_SPINS])
 
 
