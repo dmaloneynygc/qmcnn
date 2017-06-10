@@ -1,3 +1,4 @@
+# This Python file uses the following encoding: utf-8
 """Helper graph building ops."""
 import numpy as np
 import tensorflow as tf

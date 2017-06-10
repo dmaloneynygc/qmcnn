@@ -1,3 +1,4 @@
+# This Python file uses the following encoding: utf-8
 """Test module."""
 from __future__ import division
 import tensorflow as tf
@@ -13,7 +14,7 @@ LEARNING_RATE = 3E-3
 K = 5
 ALPHA = 4
 SCALE = 1E-2
-SYSTEM_SHAPE = (40,)
+SYSTEM_SHAPE = (20, 20)
 N_DIMS = len(SYSTEM_SHAPE)
 NUM_SPINS = np.prod(SYSTEM_SHAPE)
 FULL_WINDOW_SHAPE = (K*2-1,)*N_DIMS
@@ -95,6 +96,8 @@ def factors_op(x):
         theta = tf.nn.conv1d(x_expanded, filters, 1, 'VALID')+bias_hid
     elif N_DIMS == 2:
         theta = tf.nn.conv2d(x_expanded, filters, [1]*4, 'VALID')+bias_hid
+    elif N_DIMS == 3:
+        theta = tf.nn.conv3d(x_expanded, filters, [1]*5, 'VALID')+bias_hid
 
     theta = tf.complex(theta[..., :ALPHA], theta[..., ALPHA:])
     activation = tf.log(tf.exp(theta) + tf.exp(-theta))
