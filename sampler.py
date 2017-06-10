@@ -1,7 +1,8 @@
 """Sampler."""
+from __future__ import division
 import numpy as np
 from scipy.stats import bernoulli
-from utils.utils import flip_wrapped, replace_wrapped, window
+from utils import flip_wrapped, replace_wrapped, window
 
 
 class Sampler:
@@ -9,7 +10,7 @@ class Sampler:
 
     THERMFACTOR = 1
     SWEEPFACTOR = 1
-    N_SAMPLERS = 100
+    N_SAMPLERS = 1000
 
     def __init__(self, n_spins, model):
         """Initialise."""
@@ -58,7 +59,8 @@ class Sampler:
         """Sample num states."""
         self.init_sample_state()
         n_sweeps = int(num / self.N_SAMPLERS)
-        for _ in range(int(self.THERMFACTOR*self.SWEEPFACTOR*n_sweeps)):
+        for _ in range(int(self.THERMFACTOR*self.SWEEPFACTOR*n_sweeps
+                           * self.total_spins)):
             self.sample_step()
 
         padded_size = [d+(self.model.r-1)*2 for d in self.n_spins]

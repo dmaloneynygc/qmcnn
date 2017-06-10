@@ -1,4 +1,5 @@
 """Representation models."""
+from __future__ import division
 import numpy as np
 import tensorflow as tf
 
@@ -151,7 +152,8 @@ class ConvCRBM:
                 op = [self.accumulate_gradients]
             self.session.run(op, feed_dict={
                 self.state_placeholder: states_batch,
-                self.energy_placeholder: energies_batch})
+                self.energy_placeholder: energies_batch,
+                self.grad_scale: 1./num_its})
 
     def _complex_var(self, value, dtype, name=None):
         """Create complex variable out of 2 reals."""
@@ -245,10 +247,10 @@ class ConvCRBM:
             self.loss = tf.real(loss)
 
             optimizer = tf.train.AdamOptimizer(3E-3)
-            self.train_op = optimizer.minimize(self.loss)
 
             self.session = tf.Session()
-            self.session.run(tf.global_variables_initializer())
+
+            self.grad_scale = tf.placeholder(tf.float32)
 
             vars = tf.trainable_variables()
             vars_zeros = []
@@ -262,7 +264,8 @@ class ConvCRBM:
 
             gradients = optimizer.compute_gradients(self.loss, vars)
             for i, (grad, var) in enumerate(gradients):
-                grad_accums[i] = tf.assign_add(grad_accums[i], grad)
+                grad_accums[i] = tf.assign_add(
+                    grad_accums[i], self.grad_scale*grad)
             self.accumulate_gradients = grad_accums
 
             with tf.control_dependencies(grad_accums):

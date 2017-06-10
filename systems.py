@@ -1,6 +1,7 @@
 """Physical systems."""
+from __future__ import absolute_import
 import numpy as np
-from utils.utils import all_windows
+from utils import all_windows
 
 
 class Ising:
