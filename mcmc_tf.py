@@ -104,7 +104,18 @@ def factors_op(x):
 
 @scope_op()
 def loss_op(factors, energies):
-    """Compute loss."""
+    """
+    Compute loss.
+
+    Parameters
+    ----------
+    factors : Tensor of shape (N, system_size)
+    energies : Tensor of shape (N,)
+
+    Returns
+    -------
+    loss : tensor of shape (N,)
+    """
     n = tf.cast(tf.shape(factors)[0], tf.complex64)
     energies = tf.cast(energies, tf.complex64)
     log_psi = tf.reduce_sum(factors, range(1, N_DIMS+1))
@@ -117,7 +128,17 @@ def loss_op(factors, energies):
 
 @scope_op()
 def energy_op(states):
-    """Compute local energy of states."""
+    """
+    Compute local energies of Ising model.
+
+    Parameters
+    ----------
+    states : Tensor of shape (N, system_size)
+
+    Returns
+    -------
+    energies : tensor of shape (N,)
+    """
     batch_size = tf.shape(states)[0]
     states_shaped = tf.reshape(states, (batch_size,)+SYSTEM_SHAPE)
     states_padded = pad(states_shaped, SYSTEM_SHAPE, [(K-1)//2]*N_DIMS)
@@ -222,7 +243,13 @@ def mcmc_step(i):
 
 @scope_op()
 def mcmc_op():
-    """Get MCMC Samples."""
+    """
+    Compute MCMC Samples.
+
+    Returns
+    -------
+    states : tensor of shape (N, system_size)
+    """
     with tf.control_dependencies([mcmc_reset()]):
         loop = tf.while_loop(
             lambda i: i < SAMPLE_ITS,
@@ -239,7 +266,15 @@ def mcmc_op():
 
 @scope_op()
 def optimize_op():
-    """Perform optimization iteration."""
+    """
+    Perform optimization iteration.
+
+    Returns
+    -------
+    energies : tensor of shape (N,)
+        Energy of MCMC samples
+    train_op : Optimization tensorflow op
+    """
     with tf.device('/cpu:0'):
         samples = tf.stop_gradient(mcmc_op())
         energies = tf.stop_gradient(energy_op(samples))
