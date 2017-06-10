@@ -2,8 +2,9 @@
 from __future__ import division
 import tensorflow as tf
 import numpy as np
-import functools
 from time import time
+from helpers import scope_op, alignedness, gather_windows, update_windows, \
+    all_windows, pad, unpad
 
 
 tf.reset_default_graph()
@@ -21,107 +22,13 @@ HALF_WINDOW_SHAPE = (K,)*N_DIMS
 HALF_WINDOW_SIZE = np.prod(HALF_WINDOW_SHAPE)
 H = 1.0
 
-NUM_SAMPLES = 10000
+NUM_SAMPLES = 5000
 NUM_SAMPLERS = 1000
 ITS_PER_SAMPLE = NUM_SPINS
 SAMPLES_PER_SAMPLER = NUM_SAMPLES // NUM_SAMPLERS
-THERM_ITS = SAMPLES_PER_SAMPLER
+THERM_ITS = SAMPLES_PER_SAMPLER * ITS_PER_SAMPLE
 SAMPLE_ITS = THERM_ITS + (SAMPLES_PER_SAMPLER-1) * ITS_PER_SAMPLE + 1
 OPTIMIZATION_ITS = 10000
-
-
-def create_index_matrix(data_shape, window_shape):
-    """Return wrapped index matrix, shape (n, n_windows)."""
-    n_data = np.prod(data_shape)
-    n_window = np.prod(window_shape)
-    box = np.indices(window_shape)
-    index_matrix = np.zeros((n_data, n_window), dtype=np.int32)
-    shifts = np.unravel_index(np.arange(n_data), data_shape)
-    offset = (np.array(window_shape)-1)//2
-    for i, shift in enumerate(zip(*shifts)):
-        shift = np.array(shift)-offset
-        window = (box.T + shift).T
-        index_matrix[i] = np.ravel_multi_index(window, data_shape, 'wrap') \
-            .flatten()
-    return index_matrix
-
-
-def scope_op(name=None):
-    """Put tensorflow op in name_scope."""
-    def decorator(function):
-        @functools.wraps(function)
-        def wrapper(*args, **kwargs):
-            with tf.name_scope(name or function.__name__):
-                return function(*args, **kwargs)
-        return wrapper
-    return decorator
-
-
-@scope_op()
-def unpad(x, pad_size):
-    """Unpad tensor. Pad size is the padding in any direction."""
-    size = tf.shape(x)[1:]
-    if isinstance(pad_size, int):
-        pad_size = [pad_size]*N_DIMS
-    slice_start = [0] + pad_size
-    slice_size = [-1]+[size[d]-pad_size[d]*2 for d in range(N_DIMS)]
-    return tf.slice(x, slice_start, slice_size)
-
-
-@scope_op()
-def pad(x, pad_size):
-    """Add wrapped padding."""
-    dtype = x.dtype
-    res = unpad(tf.tile(tf.cast(x, tf.int32), [1]+[3]*N_DIMS),
-                [s-pad_size for s in SYSTEM_SHAPE])
-    return tf.cast(res, dtype)
-
-
-@scope_op()
-def gather_windows(x, centers, window_shape):
-    """Gather windows around centers."""
-    window_size = np.prod(window_shape)
-    batch_size = tf.shape(x)[0]
-    index_matrix = tf.constant(create_index_matrix(SYSTEM_SHAPE, window_shape))
-    window_range = tf.range(batch_size, dtype=tf.int32)[:, None] * \
-        tf.ones(window_size, dtype=tf.int32)[None, :]
-    indices = tf.stack((window_range, tf.gather(index_matrix, centers)), 2)
-    return tf.gather_nd(x, indices)
-
-
-@scope_op()
-def update_windows(x, centers, updates, mask, window_shape):
-    """Update windows around centers at rows where mask is True."""
-    window_size = np.prod(window_shape)
-    batch_size = tf.shape(x)[0]
-    index_matrix = tf.constant(create_index_matrix(SYSTEM_SHAPE, window_shape))
-    window_range = tf.range(batch_size, dtype=tf.int32)[:, None] * \
-        tf.ones(window_size, dtype=tf.int32)[None, :]
-    indices = tf.stack((window_range, tf.gather(index_matrix, centers)), 2)
-    return tf.scatter_nd_update(
-        x, tf.boolean_mask(indices, mask), tf.boolean_mask(updates, mask))
-
-
-@scope_op()
-def all_windows(x, window_shape):
-    """Get all windows."""
-    index_matrix = tf.constant(create_index_matrix(SYSTEM_SHAPE, window_shape))
-    return tf.transpose(
-        tf.gather_nd(tf.transpose(x),
-                     tf.expand_dims(index_matrix, 2)),
-        [2, 0, 1])
-
-
-@scope_op()
-def alignedness(states):
-    """Sum of product of neighbouring spins."""
-    indices = np.arange(NUM_SPINS).reshape(SYSTEM_SHAPE)
-    interactions = []
-    for i in range(N_DIMS):
-        shifted = tf.transpose(tf.gather(
-            tf.transpose(states), np.roll(indices, 1, i).flatten()))
-        interactions.append(tf.reduce_sum(states * shifted, 1))
-    return tf.reduce_sum(tf.stack(interactions, 1), 1)
 
 
 @scope_op()
@@ -168,7 +75,7 @@ def factors_op(x):
         bias_hid = tf.get_variable("bias_hid")
 
     x_float = tf.cast(x, tf.float32)
-    x_unpad = unpad(x_float, (K-1)//2)
+    x_unpad = unpad(x_float, ((K-1)//2,)*N_DIMS)
     x_expanded = x_float[..., None]
 
     if N_DIMS == 1:
@@ -200,10 +107,10 @@ def energy_op(states):
     """Compute local energy of states."""
     batch_size = tf.shape(states)[0]
     states_shaped = tf.reshape(states, (batch_size,)+SYSTEM_SHAPE)
-    factors = tf.reshape(factors_op(pad(states_shaped, (K-1)//2)),
-                         (batch_size, -1))
-    factor_windows = all_windows(factors, HALF_WINDOW_SHAPE)
-    spin_windows = all_windows(states, FULL_WINDOW_SHAPE)
+    states_padded = pad(states_shaped, SYSTEM_SHAPE, [(K-1)//2]*N_DIMS)
+    factors = tf.reshape(factors_op(states_padded), (batch_size, -1))
+    factor_windows = all_windows(factors, SYSTEM_SHAPE, HALF_WINDOW_SHAPE)
+    spin_windows = all_windows(states, SYSTEM_SHAPE, FULL_WINDOW_SHAPE)
     flipper = np.ones(FULL_WINDOW_SIZE, dtype=np.int32)
     flipper[(FULL_WINDOW_SIZE-1)//2] = -1
     spins_flipped = spin_windows * flipper
@@ -214,7 +121,7 @@ def energy_op(states):
 
     log_pop = tf.reduce_sum(factors_flipped - factor_windows, 2)
     energy = -H * tf.reduce_sum(tf.exp(log_pop), 1) - \
-        tf.cast(alignedness(states), tf.complex64)
+        tf.cast(alignedness(states, SYSTEM_SHAPE), tf.complex64)
     return energy / NUM_SPINS
 
 
@@ -233,11 +140,8 @@ def mcmc_reset():
         [NUM_SAMPLERS, NUM_SPINS], 0, 2, dtype=tf.int32)*2-1
     states = tf.cast(states, tf.int32)
     states_shaped = tf.reshape(states, (NUM_SAMPLERS,)+SYSTEM_SHAPE)
-    factors = tf.reshape(
-        factors_op(pad(states_shaped, (K-1)//2)),
-        (NUM_SAMPLERS, -1))
-
-    # states = tf.Print(states, [states], message="RESET")
+    states_padded = pad(states_shaped, SYSTEM_SHAPE, [(K-1)//2]*N_DIMS)
+    factors = tf.reshape(factors_op(states_padded), (NUM_SAMPLERS, -1))
 
     return tf.group(
         tf.assign(current_samples, states),
@@ -263,12 +167,10 @@ def mcmc_step(i):
 
     centers = flip_positions[i]
 
-    # centers = tf.Print(centers, [i, current_samples])
-
     spin_windows = gather_windows(
-        current_samples, centers, FULL_WINDOW_SHAPE)
+        current_samples, centers, SYSTEM_SHAPE, FULL_WINDOW_SHAPE)
     factor_windows = gather_windows(
-        current_factors, centers, HALF_WINDOW_SHAPE)
+        current_factors, centers, SYSTEM_SHAPE, HALF_WINDOW_SHAPE)
 
     flipper = np.ones(FULL_WINDOW_SIZE, dtype=np.int32)
     flipper[(FULL_WINDOW_SIZE-1)//2] = -1
@@ -280,15 +182,16 @@ def mcmc_step(i):
     accept_prob = tf.pow(tf.abs(tf.exp(
         tf.reduce_sum(flipped_factors - factor_windows, 1))), 2)
     mask = accept_prob > accept_sample[i]
-    current_samples = update_windows(
-        current_samples, centers, flipped_spins, mask, FULL_WINDOW_SHAPE)
-    current_factors = update_windows(
-        current_factors, centers, flipped_factors, mask, HALF_WINDOW_SHAPE)
+    current_samples = update_windows(current_samples, centers, flipped_spins,
+                                     mask, SYSTEM_SHAPE, FULL_WINDOW_SHAPE)
+    current_factors = update_windows(current_factors, centers, flipped_factors,
+                                     mask, SYSTEM_SHAPE, HALF_WINDOW_SHAPE)
 
     def write_samples():
         """Write current_samples to samples."""
         with tf.variable_scope('sampler', reuse=True):
-            current_samples = tf.get_variable('current_samples', dtype=tf.int32)
+            current_samples = tf.get_variable('current_samples',
+                                              dtype=tf.int32)
             samples = tf.get_variable('samples', dtype=tf.int32)
         j = (i - THERM_ITS)//ITS_PER_SAMPLE
         return tf.scatter_update(samples, j, current_samples)
@@ -324,18 +227,26 @@ def mcmc_op():
 @scope_op()
 def optimize_op():
     """Perform optimization iteration."""
-    samples = tf.stop_gradient(mcmc_op())
-    samples_shaped = pad(
-        tf.reshape(samples, (NUM_SAMPLES,)+SYSTEM_SHAPE), (K-1)//2)
-    energies = tf.stop_gradient(energy_op(samples))
-    loss = loss_op(factors_op(samples_shaped), energies)
-    # optimizer = tf.train.GradientDescentOptimizer(LEARNING_RATE)
-    optimizer = tf.train.AdamOptimizer(LEARNING_RATE)
+    with tf.device('/cpu:0'):
+        samples = tf.stop_gradient(mcmc_op())
+        energies = tf.stop_gradient(energy_op(samples))
 
-    return energies, optimizer.minimize(loss)
+    with tf.device('/gpu:0'):
+        samples_shaped = tf.reshape(samples, (NUM_SAMPLES,)+SYSTEM_SHAPE)
+        samples_padded = pad(samples_shaped, SYSTEM_SHAPE, [(K-1)//2]*N_DIMS)
+        loss = loss_op(factors_op(samples_padded), energies)
+        # optimizer = tf.train.GradientDescentOptimizer(LEARNING_RATE)
+        optimizer = tf.train.AdamOptimizer(LEARNING_RATE)
+        train_op = optimizer.minimize(loss)
+
+    return energies, train_op
 
 
-with tf.Graph().as_default(), tf.Session() as sess:
+config = tf.ConfigProto(
+    # log_device_placement=True,
+    allow_soft_placement=True
+)
+with tf.Graph().as_default(), tf.Session(config=config) as sess:
     create_vars()
     op = optimize_op()
     sess.run(tf.global_variables_initializer())
