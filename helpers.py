@@ -5,7 +5,20 @@ import functools
 
 
 def create_index_matrix(data_shape, window_shape):
-    """Return wrapped index matrix, shape (n, n_windows)."""
+    """
+    Return windows of indices into the flattened data.
+
+    data[index_matrix[i]] returns the flattened window around the i-th element.
+
+    Parameters
+    ----------
+    data_shape : tuple
+    window_shape : tuple
+
+    Returns
+    -------
+    index_matrix : (data_size, window_size) array of int32
+    """
     n_data = np.prod(data_shape)
     n_window = np.prod(window_shape)
     box = np.indices(window_shape)
@@ -21,7 +34,11 @@ def create_index_matrix(data_shape, window_shape):
 
 
 def scope_op(name=None):
-    """Put tensorflow op in name_scope."""
+    """
+    Decorate tensorflow op graph building function with name_scope.
+
+    Name defaults to function name.
+    """
     def decorator(function):
         @functools.wraps(function)
         def wrapper(*args, **kwargs):
@@ -33,7 +50,19 @@ def scope_op(name=None):
 
 @scope_op()
 def unpad(x, pad_size):
-    """Unpad tensor. Pad size is the padding in any direction."""
+    """
+    Unpad tensor.
+
+    Parameters
+    ----------
+    x : tensor
+    pad_size : tuple
+        How many elements must be removed at both sides in each dimension.
+
+    Returns
+    -------
+    x : tensor
+    """
     size = tf.shape(x)[1:]
     slice_start = (0,) + pad_size
     slice_size = (-1,)+tuple(size[d]-p*2 for d, p in enumerate(pad_size))
@@ -42,7 +71,20 @@ def unpad(x, pad_size):
 
 @scope_op()
 def pad(x, system_shape, pad_size):
-    """Add wrapped padding."""
+    """
+    Pad tensor by wrapping around at the borders.
+
+    Parameters
+    ----------
+    x : tensor
+    system_size : tuple
+    pad_size : tuple
+        How many elements must be added at both sides in each dimension.
+
+    Returns
+    -------
+    x : tensor
+    """
     dtype = x.dtype
     res = unpad(tf.tile(tf.cast(x, tf.int32), (1,)+(3,)*len(pad_size)),
                 tuple(s-p for s, p in zip(system_shape, pad_size)))
@@ -51,7 +93,22 @@ def pad(x, system_shape, pad_size):
 
 @scope_op()
 def gather_windows(x, centers, system_shape, window_shape):
-    """Gather windows around centers."""
+    """
+    Gather windows of tensor around centers.
+
+    Uses wrapped padding.
+
+    Parameters
+    ----------
+    x : tensor of shape (N,) + system_shape
+    centers : integer tensor of shape (N, N_DIMS)
+    system_shape : tuple
+    window_shape : tuple
+
+    Returns
+    -------
+    windows : tensor of shape (N, window_size)
+    """
     window_size = np.prod(window_shape)
     batch_size = tf.shape(x)[0]
     index_matrix = tf.constant(create_index_matrix(system_shape, window_shape))
@@ -63,7 +120,22 @@ def gather_windows(x, centers, system_shape, window_shape):
 
 @scope_op()
 def update_windows(x, centers, updates, mask, system_shape, window_shape):
-    """Update windows around centers at rows where mask is True."""
+    """
+    Update windows around centers with updates at rows where mask is True.
+
+    Parameters
+    ----------
+    x : Variable tensor of shape (N,) + system_shape
+    centers : tensor of shape (N, N_DIMS)
+    updates : Tensor of shape (N,) + window_shape
+    mask : boolean tensor of shape (N,)
+    system_shape : tuple
+    window_shape : tuple
+
+    Returns
+    -------
+    x : Ref to updated variable
+    """
     window_size = np.prod(window_shape)
     batch_size = tf.shape(x)[0]
     index_matrix = tf.constant(create_index_matrix(system_shape, window_shape))
@@ -76,7 +148,19 @@ def update_windows(x, centers, updates, mask, system_shape, window_shape):
 
 @scope_op()
 def all_windows(x, system_shape, window_shape):
-    """Get all windows."""
+    """
+    Gather all windows of tensor.
+
+    Parameters
+    ----------
+    x : tensor of shape (N,) + system_shape
+    system_shape : tuple
+    window_shape : tuple
+
+    Returns
+    -------
+    windows : tensor of shape (N, system_size, window_size)
+    """
     index_matrix = tf.constant(create_index_matrix(system_shape, window_shape))
     return tf.transpose(
         tf.gather_nd(tf.transpose(x),
@@ -86,7 +170,21 @@ def all_windows(x, system_shape, window_shape):
 
 @scope_op()
 def alignedness(states, system_shape):
-    """Sum of product of neighbouring spins."""
+    """
+    Compute alignedness of batch of states.
+
+    Alignedness is the sum of the product of all neighbouring spins. Also
+    considers neighbours that wrap around the edge.
+
+    Parameters
+    ----------
+    states : ±1 tensor of shape (N,) + system_shape
+    system_shape : tuple
+
+    Returns
+    -------
+    alignedness : integer tensor of shape (N,)
+    """
     num_spins = np.prod(system_shape)
     indices = np.arange(num_spins).reshape(system_shape)
     interactions = []

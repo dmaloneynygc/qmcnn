@@ -68,7 +68,20 @@ def create_vars():
 
 @scope_op()
 def factors_op(x):
-    """Compute model factors."""
+    """
+    Compute model factors.
+
+    Performs 'VALID' convolution. Output is (K-1)//2 smaller in both directions
+    in all dimensions.
+
+    Parameters
+    ----------
+    x : Tensor of shape (N,) + system_shape
+
+    Returns
+    -------
+    factors : tensor of shape (N,) + unpadded shape of x
+    """
     with tf.variable_scope("factors", reuse=True):
         filters = tf.get_variable("filters")
         bias_vis = tf.get_variable("bias_vis")
