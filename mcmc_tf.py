@@ -280,7 +280,15 @@ def optimize_op():
     """
     with tf.device('/cpu:0'):
         samples = tf.stop_gradient(mcmc_op())
-        energies = tf.stop_gradient(energy_op(samples))
+        # Compute energy in batches
+        energies = tf.map_fn(
+            fn=energy_op,
+            elems=tf.reshape(samples, (-1, ENERGY_BATCH_SIZE, NUM_SPINS)),
+            dtype=tf.complex64,
+            parallel_iterations=1,
+            back_prop=False)
+        energies = tf.reshape(energies, (-1,))
+        energies = tf.stop_gradient(energies)
 
     with tf.device('/gpu:0'):
         samples_shaped = tf.reshape(samples, (NUM_SAMPLES,)+SYSTEM_SHAPE)
