@@ -5,16 +5,16 @@ import tensorflow as tf
 import numpy as np
 from time import time
 from helpers import scope_op, alignedness, gather_windows, update_windows, \
-    all_windows, pad, unpad
+    all_windows, pad
+from models import CRBM, DCRBM
+from functools import partial
 
-
-tf.reset_default_graph()
 
 LEARNING_RATE = 3E-3
 K = 5
 ALPHA = 4
 SCALE = 1E-2
-SYSTEM_SHAPE = (20, 20)
+SYSTEM_SHAPE = (10, 10)
 N_DIMS = len(SYSTEM_SHAPE)
 NUM_SPINS = np.prod(SYSTEM_SHAPE)
 FULL_WINDOW_SHAPE = (K*2-1,)*N_DIMS
@@ -23,28 +23,21 @@ HALF_WINDOW_SHAPE = (K,)*N_DIMS
 HALF_WINDOW_SIZE = np.prod(HALF_WINDOW_SHAPE)
 H = 1.0
 
-NUM_SAMPLES = 5000
-NUM_SAMPLERS = 1000
+NUM_SAMPLES = 1000
+NUM_SAMPLERS = 200
 ITS_PER_SAMPLE = NUM_SPINS
 SAMPLES_PER_SAMPLER = NUM_SAMPLES // NUM_SAMPLERS
 THERM_ITS = SAMPLES_PER_SAMPLER * ITS_PER_SAMPLE
 SAMPLE_ITS = THERM_ITS + (SAMPLES_PER_SAMPLER-1) * ITS_PER_SAMPLE + 1
 OPTIMIZATION_ITS = 10000
+ENERGY_BATCH_SIZE = 50
+ENERGY_BATCH_SIZE = 1000
 
 
 @scope_op()
-def create_vars():
+def create_vars(model):
     """Add vars to graph."""
-    with tf.variable_scope("factors"):
-        tf.get_variable(
-            "filters", shape=[K]*N_DIMS+[1]+[2*ALPHA], dtype=tf.float32,
-            initializer=tf.random_normal_initializer(0., SCALE))
-        tf.get_variable(
-            "bias_vis", shape=[2], dtype=tf.float32,
-            initializer=tf.random_normal_initializer(0., SCALE))
-        tf.get_variable(
-            "bias_hid", shape=[2*ALPHA], dtype=tf.float32,
-            initializer=tf.random_normal_initializer(0., SCALE))
+    model.get_variables()
 
     with tf.variable_scope("sampler"):
         tf.get_variable("current_samples",
@@ -65,44 +58,6 @@ def create_vars():
         tf.get_variable("accept_sample", shape=[SAMPLE_ITS, NUM_SAMPLERS],
                         initializer=tf.constant_initializer(0.),
                         dtype=tf.float32, trainable=False)
-
-
-@scope_op()
-def factors_op(x):
-    """
-    Compute model factors.
-
-    Performs 'VALID' convolution. Output is (K-1)//2 smaller in both directions
-    in all dimensions.
-
-    Parameters
-    ----------
-    x : Tensor of shape (N,) + system_shape
-
-    Returns
-    -------
-    factors : tensor of shape (N,) + unpadded shape of x
-    """
-    with tf.variable_scope("factors", reuse=True):
-        filters = tf.get_variable("filters")
-        bias_vis = tf.get_variable("bias_vis")
-        bias_hid = tf.get_variable("bias_hid")
-
-    x_float = tf.cast(x, tf.float32)
-    x_unpad = unpad(x_float, ((K-1)//2,)*N_DIMS)
-    x_expanded = x_float[..., None]
-
-    if N_DIMS == 1:
-        theta = tf.nn.conv1d(x_expanded, filters, 1, 'VALID')+bias_hid
-    elif N_DIMS == 2:
-        theta = tf.nn.conv2d(x_expanded, filters, [1]*4, 'VALID')+bias_hid
-    elif N_DIMS == 3:
-        theta = tf.nn.conv3d(x_expanded, filters, [1]*5, 'VALID')+bias_hid
-
-    theta = tf.complex(theta[..., :ALPHA], theta[..., ALPHA:])
-    activation = tf.log(tf.exp(theta) + tf.exp(-theta))
-    bias = tf.complex(bias_vis[0] * x_unpad, bias_vis[1] * x_unpad)
-    return tf.reduce_sum(activation, N_DIMS+1) + bias
 
 
 @scope_op()
@@ -130,7 +85,7 @@ def loss_op(factors, energies):
 
 
 @scope_op()
-def energy_op(states):
+def energy_op(model, states):
     """
     Compute local energies of Ising model.
 
@@ -145,14 +100,14 @@ def energy_op(states):
     batch_size = tf.shape(states)[0]
     states_shaped = tf.reshape(states, (batch_size,)+SYSTEM_SHAPE)
     states_padded = pad(states_shaped, SYSTEM_SHAPE, [(K-1)//2]*N_DIMS)
-    factors = tf.reshape(factors_op(states_padded), (batch_size, -1))
+    factors = tf.reshape(model.factors(states_padded), (batch_size, -1))
     factor_windows = all_windows(factors, SYSTEM_SHAPE, HALF_WINDOW_SHAPE)
     spin_windows = all_windows(states, SYSTEM_SHAPE, FULL_WINDOW_SHAPE)
     flipper = np.ones(FULL_WINDOW_SIZE, dtype=np.int32)
     flipper[(FULL_WINDOW_SIZE-1)//2] = -1
     spins_flipped = spin_windows * flipper
     factors_flipped = tf.reshape(
-        factors_op(tf.reshape(
+        model.factors(tf.reshape(
             spins_flipped, (batch_size*NUM_SPINS,)+FULL_WINDOW_SHAPE)),
         (batch_size, NUM_SPINS, HALF_WINDOW_SIZE))
 
@@ -163,7 +118,7 @@ def energy_op(states):
 
 
 @scope_op()
-def mcmc_reset():
+def mcmc_reset(model):
     """Reset MCMC variables."""
     with tf.variable_scope('sampler', reuse=True):
         current_samples = tf.get_variable('current_samples', dtype=tf.int32)
@@ -178,7 +133,7 @@ def mcmc_reset():
     states = tf.cast(states, tf.int32)
     states_shaped = tf.reshape(states, (NUM_SAMPLERS,)+SYSTEM_SHAPE)
     states_padded = pad(states_shaped, SYSTEM_SHAPE, [(K-1)//2]*N_DIMS)
-    factors = tf.reshape(factors_op(states_padded), (NUM_SAMPLERS, -1))
+    factors = tf.reshape(model.factors(states_padded), (NUM_SAMPLERS, -1))
 
     return tf.group(
         tf.assign(current_samples, states),
@@ -192,7 +147,7 @@ def mcmc_reset():
 
 
 @scope_op()
-def mcmc_step(i):
+def mcmc_step(model, i):
     """Do MCMC Step."""
     with tf.variable_scope('sampler', reuse=True):
         current_samples = tf.get_variable('current_samples', dtype=tf.int32)
@@ -213,7 +168,7 @@ def mcmc_step(i):
     flipper[(FULL_WINDOW_SIZE-1)//2] = -1
     flipped_spins = spin_windows * flipper
     flipped_factors = tf.reshape(
-        factors_op(
+        model.factors(
             tf.reshape(flipped_spins, (NUM_SAMPLERS,)+FULL_WINDOW_SHAPE)),
         (NUM_SAMPLERS, -1))
     accept_prob = tf.pow(tf.abs(tf.exp(
@@ -245,7 +200,7 @@ def mcmc_step(i):
 
 
 @scope_op()
-def mcmc_op():
+def mcmc_op(model):
     """
     Compute MCMC Samples.
 
@@ -253,10 +208,10 @@ def mcmc_op():
     -------
     states : tensor of shape (N, system_size)
     """
-    with tf.control_dependencies([mcmc_reset()]):
+    with tf.control_dependencies([mcmc_reset(model)]):
         loop = tf.while_loop(
             lambda i: i < SAMPLE_ITS,
-            mcmc_step,
+            partial(mcmc_step, model),
             [tf.constant(0)],
             parallel_iterations=1,
             back_prop=False
@@ -268,7 +223,7 @@ def mcmc_op():
 
 
 @scope_op()
-def optimize_op():
+def optimize_op(model):
     """
     Perform optimization iteration.
 
@@ -279,10 +234,10 @@ def optimize_op():
     train_op : Optimization tensorflow op
     """
     with tf.device('/cpu:0'):
-        samples = tf.stop_gradient(mcmc_op())
+        samples = tf.stop_gradient(mcmc_op(model))
         # Compute energy in batches
         energies = tf.map_fn(
-            fn=energy_op,
+            fn=partial(energy_op, model),
             elems=tf.reshape(samples, (-1, ENERGY_BATCH_SIZE, NUM_SPINS)),
             dtype=tf.complex64,
             parallel_iterations=1,
@@ -293,8 +248,8 @@ def optimize_op():
     with tf.device('/gpu:0'):
         samples_shaped = tf.reshape(samples, (NUM_SAMPLES,)+SYSTEM_SHAPE)
         samples_padded = pad(samples_shaped, SYSTEM_SHAPE, [(K-1)//2]*N_DIMS)
-        loss = loss_op(factors_op(samples_padded), energies)
-        # optimizer = tf.train.GradientDescentOptimizer(LEARNING_RATE)
+        loss = loss_op(model.factors(samples_padded), energies)
+        # optimizer = tf.train.model(LEARNING_RATE)
         optimizer = tf.train.AdamOptimizer(LEARNING_RATE)
         train_op = optimizer.minimize(loss)
 
@@ -306,8 +261,10 @@ config = tf.ConfigProto(
     allow_soft_placement=True
 )
 with tf.Graph().as_default(), tf.Session(config=config) as sess:
-    create_vars()
-    op = optimize_op()
+    # model = CRBM(K, ALPHA, N_DIMS)
+    model = DCRBM(3, [8, 8], N_DIMS)
+    create_vars(model)
+    op = optimize_op(model)
     sess.run(tf.global_variables_initializer())
 
     # writer = tf.summary.FileWriter('./logs', sess.graph)
