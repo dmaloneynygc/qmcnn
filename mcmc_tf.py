@@ -23,15 +23,14 @@ HALF_WINDOW_SHAPE = (K,)*N_DIMS
 HALF_WINDOW_SIZE = np.prod(HALF_WINDOW_SHAPE)
 H = 1.0
 
-NUM_SAMPLES = 1000
-NUM_SAMPLERS = 200
-ITS_PER_SAMPLE = NUM_SPINS
+NUM_SAMPLES = 10
+NUM_SAMPLERS = 10
+ITS_PER_SAMPLE = NUM_SPINS * 10
 SAMPLES_PER_SAMPLER = NUM_SAMPLES // NUM_SAMPLERS
 THERM_ITS = SAMPLES_PER_SAMPLER * ITS_PER_SAMPLE
 SAMPLE_ITS = THERM_ITS + (SAMPLES_PER_SAMPLER-1) * ITS_PER_SAMPLE + 1
 OPTIMIZATION_ITS = 10000
-ENERGY_BATCH_SIZE = 50
-ENERGY_BATCH_SIZE = 1000
+ENERGY_BATCH_SIZE = 10
 
 
 @scope_op()
@@ -261,8 +260,8 @@ config = tf.ConfigProto(
     allow_soft_placement=True
 )
 with tf.Graph().as_default(), tf.Session(config=config) as sess:
-    # model = CRBM(K, ALPHA, N_DIMS)
-    model = DCRBM(3, [8, 8], N_DIMS)
+    model = CRBM(K, ALPHA, N_DIMS)
+    # model = DCRBM(3, [8, 8], N_DIMS)
     create_vars(model)
     op = optimize_op(model)
     sess.run(tf.global_variables_initializer())
