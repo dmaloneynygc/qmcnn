@@ -31,7 +31,7 @@ class Sampler(object):
         self.sample_its = (self.therm_its + (self.samples_per_sampler-1)
                            * self.its_per_sample + 1)
 
-        with tf.variable_scope("sampler"):
+        with tf.variable_scope("sampler_%03d" % np.random.randint(1000)):
             self.current_samples_var = tf.get_variable(
                 "current_samples",
                 shape=[self.num_samplers, self.num_spins],
@@ -149,6 +149,5 @@ class Sampler(object):
                 back_prop=False
             )
         with tf.control_dependencies([loop]):
-            with tf.variable_scope('sampler', reuse=True):
-                samples = tf.get_variable('samples', dtype=tf.int32)
-            return tf.reshape(samples, [self.num_samples, self.num_spins])
+            return tf.reshape(self.samples_var,
+                              [self.num_samples, self.num_spins])

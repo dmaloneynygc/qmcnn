@@ -25,7 +25,10 @@ H = 1.0
 
 NUM_SAMPLES = 100
 OPTIMIZATION_ITS = 10000
-ENERGY_BATCH_SIZE = 10
+ENERGY_BATCH_SIZE = 1000
+
+NUM_EVAL_SAMPLES = 10000
+EVAL_FREQ = 500
 
 
 @scope_op()
@@ -86,6 +89,18 @@ def energy_op(model, states):
 
 
 @scope_op()
+def batched_energy_op(model, states):
+    """Do on-graph batched energy computation."""
+    energies = tf.map_fn(
+        fn=partial(energy_op, model),
+        elems=tf.reshape(states, (-1, ENERGY_BATCH_SIZE, NUM_SPINS)),
+        dtype=tf.complex64,
+        parallel_iterations=1,
+        back_prop=False)
+    return tf.reshape(energies, (-1,))
+
+
+@scope_op()
 def optimize_op(sampler, model):
     """
     Perform optimization iteration.
@@ -98,14 +113,7 @@ def optimize_op(sampler, model):
     """
     with tf.device('/cpu:0'):
         samples = tf.stop_gradient(sampler.mcmc_op(model))
-        # Compute energy in batches
-        energies = tf.map_fn(
-            fn=partial(energy_op, model),
-            elems=tf.reshape(samples, (-1, ENERGY_BATCH_SIZE, NUM_SPINS)),
-            dtype=tf.complex64,
-            parallel_iterations=1,
-            back_prop=False)
-        energies = tf.reshape(energies, (-1,))
+        energies = energy_op(model, samples)
         energies = tf.stop_gradient(energies)
 
     with tf.device('/gpu:0'):
@@ -126,8 +134,10 @@ config = tf.ConfigProto(
 with tf.Graph().as_default(), tf.Session(config=config) as sess:
     model = CRBM(K, ALPHA, N_DIMS)
     sampler = Sampler(SYSTEM_SHAPE, K, NUM_SAMPLES)
+    eval_sampler = Sampler(SYSTEM_SHAPE, K, NUM_EVAL_SAMPLES)
     # model = DCRBM(3, [8, 8], N_DIMS)
     op = optimize_op(sampler, model)
+    eval_energies = batched_energy_op(model, eval_sampler.mcmc_op(model))
     sess.run(tf.global_variables_initializer())
 
     # writer = tf.summary.FileWriter('./logs', sess.graph)
@@ -136,5 +146,13 @@ with tf.Graph().as_default(), tf.Session(config=config) as sess:
         e, _ = sess.run(op)
         e = np.real(e)
         print("It %d, E=%.5f (%.2e) %.1fs" %
-              (it+1, e.mean(), e.std()/np.sqrt(NUM_SAMPLES), time()-start))
+              (it+1, e.mean(), e.std()/np.sqrt(e.shape[0]), time()-start))
+
+        if it > 0 and (it+1) % EVAL_FREQ == 0:
+            start = time()
+            e = sess.run(eval_energies)
+            e = np.real(e)
+            print("Eval It %d, E=%.5f (%.2e) %.1fs" %
+                  (it+1, e.mean(), e.std()/np.sqrt(e.shape[0]), time()-start))
+
     # writer.flush()
