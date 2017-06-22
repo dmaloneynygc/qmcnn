@@ -3,7 +3,7 @@ import tensorflow as tf
 from helpers import unpad, scope_op
 
 
-class CRBM:
+class CRBM(object):
     """Convolutional marginalised RBM."""
 
     SCALE = 1E-2
@@ -13,6 +13,8 @@ class CRBM:
         self.alpha = alpha
         self.k = k
         self.n_dims = n_dims
+
+        self.get_variables()
 
     def get_variables(self):
         """Get variables usedl by model."""

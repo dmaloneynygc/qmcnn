@@ -4,9 +4,9 @@ from __future__ import division
 import tensorflow as tf
 import numpy as np
 from time import time
-from helpers import scope_op, alignedness, gather_windows, update_windows, \
-    all_windows, pad
-from models import CRBM, DCRBM
+from helpers import scope_op, alignedness, all_windows, pad
+from models import CRBM
+from sampler import Sampler
 from functools import partial
 
 
@@ -14,7 +14,7 @@ LEARNING_RATE = 3E-3
 K = 5
 ALPHA = 4
 SCALE = 1E-2
-SYSTEM_SHAPE = (10, 10)
+SYSTEM_SHAPE = (40,)
 N_DIMS = len(SYSTEM_SHAPE)
 NUM_SPINS = np.prod(SYSTEM_SHAPE)
 FULL_WINDOW_SHAPE = (K*2-1,)*N_DIMS
@@ -23,40 +23,9 @@ HALF_WINDOW_SHAPE = (K,)*N_DIMS
 HALF_WINDOW_SIZE = np.prod(HALF_WINDOW_SHAPE)
 H = 1.0
 
-NUM_SAMPLES = 10
-NUM_SAMPLERS = 10
-ITS_PER_SAMPLE = NUM_SPINS * 10
-SAMPLES_PER_SAMPLER = NUM_SAMPLES // NUM_SAMPLERS
-THERM_ITS = SAMPLES_PER_SAMPLER * ITS_PER_SAMPLE
-SAMPLE_ITS = THERM_ITS + (SAMPLES_PER_SAMPLER-1) * ITS_PER_SAMPLE + 1
+NUM_SAMPLES = 100
 OPTIMIZATION_ITS = 10000
 ENERGY_BATCH_SIZE = 10
-
-
-@scope_op()
-def create_vars(model):
-    """Add vars to graph."""
-    model.get_variables()
-
-    with tf.variable_scope("sampler"):
-        tf.get_variable("current_samples",
-                        shape=[NUM_SAMPLERS, NUM_SPINS],
-                        initializer=tf.constant_initializer(0),
-                        dtype=tf.int32, trainable=False)
-        tf.get_variable("current_factors",
-                        shape=[NUM_SAMPLERS, NUM_SPINS],
-                        initializer=tf.constant_initializer(0),
-                        dtype=tf.complex64, trainable=False)
-        tf.get_variable("samples",
-                        shape=[SAMPLES_PER_SAMPLER, NUM_SAMPLERS, NUM_SPINS],
-                        initializer=tf.constant_initializer(0),
-                        dtype=tf.int32, trainable=False)
-        tf.get_variable("flip_positions", shape=[SAMPLE_ITS, NUM_SAMPLERS],
-                        initializer=tf.constant_initializer(0),
-                        dtype=tf.int32, trainable=False)
-        tf.get_variable("accept_sample", shape=[SAMPLE_ITS, NUM_SAMPLERS],
-                        initializer=tf.constant_initializer(0.),
-                        dtype=tf.float32, trainable=False)
 
 
 @scope_op()
@@ -117,112 +86,7 @@ def energy_op(model, states):
 
 
 @scope_op()
-def mcmc_reset(model):
-    """Reset MCMC variables."""
-    with tf.variable_scope('sampler', reuse=True):
-        current_samples = tf.get_variable('current_samples', dtype=tf.int32)
-        current_factors = tf.get_variable('current_factors',
-                                          dtype=tf.complex64)
-        samples = tf.get_variable('samples', dtype=tf.int32)
-        flip_positions = tf.get_variable('flip_positions', dtype=tf.int32)
-        accept_sample = tf.get_variable('accept_sample', dtype=tf.float32)
-
-    states = tf.random_uniform(
-        [NUM_SAMPLERS, NUM_SPINS], 0, 2, dtype=tf.int32)*2-1
-    states = tf.cast(states, tf.int32)
-    states_shaped = tf.reshape(states, (NUM_SAMPLERS,)+SYSTEM_SHAPE)
-    states_padded = pad(states_shaped, SYSTEM_SHAPE, [(K-1)//2]*N_DIMS)
-    factors = tf.reshape(model.factors(states_padded), (NUM_SAMPLERS, -1))
-
-    return tf.group(
-        tf.assign(current_samples, states),
-        tf.assign(current_factors, factors),
-        tf.assign(samples, tf.zeros_like(samples, dtype=samples.dtype)),
-        tf.assign(flip_positions, tf.random_uniform(
-            [SAMPLE_ITS, NUM_SAMPLERS], 0, NUM_SPINS, dtype=tf.int32)),
-        tf.assign(accept_sample, tf.random_uniform(
-            [SAMPLE_ITS, NUM_SAMPLERS], 0., 1., dtype=tf.float32)),
-    )
-
-
-@scope_op()
-def mcmc_step(model, i):
-    """Do MCMC Step."""
-    with tf.variable_scope('sampler', reuse=True):
-        current_samples = tf.get_variable('current_samples', dtype=tf.int32)
-        current_factors = tf.get_variable(
-            'current_factors', dtype=tf.complex64)
-        samples = tf.get_variable('samples', dtype=tf.int32)
-        flip_positions = tf.get_variable('flip_positions', dtype=tf.int32)
-        accept_sample = tf.get_variable('accept_sample', dtype=tf.float32)
-
-    centers = flip_positions[i]
-
-    spin_windows = gather_windows(
-        current_samples, centers, SYSTEM_SHAPE, FULL_WINDOW_SHAPE)
-    factor_windows = gather_windows(
-        current_factors, centers, SYSTEM_SHAPE, HALF_WINDOW_SHAPE)
-
-    flipper = np.ones(FULL_WINDOW_SIZE, dtype=np.int32)
-    flipper[(FULL_WINDOW_SIZE-1)//2] = -1
-    flipped_spins = spin_windows * flipper
-    flipped_factors = tf.reshape(
-        model.factors(
-            tf.reshape(flipped_spins, (NUM_SAMPLERS,)+FULL_WINDOW_SHAPE)),
-        (NUM_SAMPLERS, -1))
-    accept_prob = tf.pow(tf.abs(tf.exp(
-        tf.reduce_sum(flipped_factors - factor_windows, 1))), 2)
-    mask = accept_prob > accept_sample[i]
-    current_samples = update_windows(current_samples, centers, flipped_spins,
-                                     mask, SYSTEM_SHAPE, FULL_WINDOW_SHAPE)
-    current_factors = update_windows(current_factors, centers, flipped_factors,
-                                     mask, SYSTEM_SHAPE, HALF_WINDOW_SHAPE)
-
-    def write_samples():
-        """Write current_samples to samples."""
-        with tf.variable_scope('sampler', reuse=True):
-            current_samples = tf.get_variable('current_samples',
-                                              dtype=tf.int32)
-            samples = tf.get_variable('samples', dtype=tf.int32)
-        j = (i - THERM_ITS)//ITS_PER_SAMPLE
-        return tf.scatter_update(samples, j, current_samples)
-
-    with tf.control_dependencies([current_samples, current_factors]):
-        write_op = tf.cond(
-            tf.logical_and(
-                tf.greater_equal(i, THERM_ITS),
-                tf.equal((i - THERM_ITS) % ITS_PER_SAMPLE, 0)),
-            write_samples, lambda: samples)
-
-    with tf.control_dependencies([write_op, mask]):
-        return i+1
-
-
-@scope_op()
-def mcmc_op(model):
-    """
-    Compute MCMC Samples.
-
-    Returns
-    -------
-    states : tensor of shape (N, system_size)
-    """
-    with tf.control_dependencies([mcmc_reset(model)]):
-        loop = tf.while_loop(
-            lambda i: i < SAMPLE_ITS,
-            partial(mcmc_step, model),
-            [tf.constant(0)],
-            parallel_iterations=1,
-            back_prop=False
-        )
-    with tf.control_dependencies([loop]):
-        with tf.variable_scope('sampler', reuse=True):
-            samples = tf.get_variable('samples', dtype=tf.int32)
-        return tf.reshape(samples, [NUM_SAMPLES, NUM_SPINS])
-
-
-@scope_op()
-def optimize_op(model):
+def optimize_op(sampler, model):
     """
     Perform optimization iteration.
 
@@ -233,7 +97,7 @@ def optimize_op(model):
     train_op : Optimization tensorflow op
     """
     with tf.device('/cpu:0'):
-        samples = tf.stop_gradient(mcmc_op(model))
+        samples = tf.stop_gradient(sampler.mcmc_op(model))
         # Compute energy in batches
         energies = tf.map_fn(
             fn=partial(energy_op, model),
@@ -261,9 +125,9 @@ config = tf.ConfigProto(
 )
 with tf.Graph().as_default(), tf.Session(config=config) as sess:
     model = CRBM(K, ALPHA, N_DIMS)
+    sampler = Sampler(SYSTEM_SHAPE, K, NUM_SAMPLES)
     # model = DCRBM(3, [8, 8], N_DIMS)
-    create_vars(model)
-    op = optimize_op(model)
+    op = optimize_op(sampler, model)
     sess.run(tf.global_variables_initializer())
 
     # writer = tf.summary.FileWriter('./logs', sess.graph)
