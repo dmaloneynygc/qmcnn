@@ -8,29 +8,24 @@ class CRBM(object):
 
     SCALE = 1E-2
 
-    def __init__(self, k, alpha, n_dims):
+    def __init__(self, k, pad_size, alpha, n_dims):
         """Initialise."""
         self.alpha = alpha
         self.k = k
+        self.pad_size = pad_size
         self.n_dims = n_dims
 
-        self.get_variables()
-
-    def get_variables(self):
-        """Get variables usedl by model."""
         with tf.variable_scope("factors"):
-            return [
-                tf.get_variable(
-                    "filters", shape=[self.k]*self.n_dims+[1]+[2*self.alpha],
-                    dtype=tf.float32,
-                    initializer=tf.random_normal_initializer(0., self.SCALE)),
-                tf.get_variable(
-                    "bias_vis", shape=[2], dtype=tf.float32,
-                    initializer=tf.random_normal_initializer(0., self.SCALE)),
-                tf.get_variable(
-                    "bias_hid", shape=[2*self.alpha], dtype=tf.float32,
-                    initializer=tf.random_normal_initializer(0., self.SCALE))
-            ]
+            tf.get_variable(
+                "filters", shape=[self.k]*self.n_dims+[1]+[2*self.alpha],
+                dtype=tf.float32,
+                initializer=tf.random_normal_initializer(0., self.SCALE)),
+            tf.get_variable(
+                "bias_vis", shape=[2], dtype=tf.float32,
+                initializer=tf.random_normal_initializer(0., self.SCALE)),
+            tf.get_variable(
+                "bias_hid", shape=[2*self.alpha], dtype=tf.float32,
+                initializer=tf.random_normal_initializer(0., self.SCALE))
 
     @scope_op('crbm-factors')
     def factors(self, x):
@@ -54,7 +49,7 @@ class CRBM(object):
             bias_hid = tf.get_variable("bias_hid")
 
         x_float = tf.cast(x, tf.float32)
-        x_unpad = unpad(x_float, ((self.k-1)//2,)*self.n_dims)
+        x_unpad = unpad(x_float, (self.pad_size,)*self.n_dims)
         x_expanded = x_float[..., None]
 
         with tf.device('/gpu:0'):
@@ -85,21 +80,16 @@ class DCRBM:
         self.k = k
         self.n_dims = n_dims
 
-    def get_variables(self):
-        """Get variables usedl by model."""
-        vars = []
         shape = [self.k]*self.n_dims
         with tf.variable_scope("factors"):
             for l, (in_, out) in enumerate(self.shapes):
-                filters = tf.get_variable(
+                tf.get_variable(
                     "filters_%d" % l, shape=shape + [in_, out],
                     dtype=tf.float32,
                     initializer=tf.random_normal_initializer(0., self.SCALE)),
-                bias = tf.get_variable(
+                tf.get_variable(
                     "bias_%d" % l, shape=[out], dtype=tf.float32,
                     initializer=tf.random_normal_initializer(0., self.SCALE))
-                vars += [filters, bias]
-        return vars
 
     @scope_op('dcrbm-factors')
     def factors(self, x):
@@ -139,6 +129,3 @@ class DCRBM:
         theta = tf.complex(x[..., :sep], x[..., sep:])
         act = tf.log(tf.exp(theta) + tf.exp(-theta))
         return tf.reduce_sum(act, self.n_dims+1)
-        # re = tf.reduce_sum(x[..., :sep], self.n_dims+1)
-        # im = tf.reduce_sum(x[..., sep:], self.n_dims+1)
-        # return tf.complex(re, im)

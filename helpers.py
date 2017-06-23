@@ -170,27 +170,27 @@ def all_windows(x, system_shape, window_shape):
 
 
 @scope_op()
-def alignedness(states, system_shape):
+def interactions(states, system_shape):
     """
-    Compute alignedness of batch of states.
+    Compute state interactions.
 
-    Alignedness is the sum of the product of all neighbouring spins. Also
-    considers neighbours that wrap around the edge.
+    Computes the product of neighbouring spins in all directions.
+    Result is located at the spin of lowest index.
 
     Parameters
     ----------
-    states : ±1 tensor of shape (N,) + system_shape
+    states : ±1 tensor of shape (N, system_size)
     system_shape : tuple
 
     Returns
     -------
-    alignedness : integer tensor of shape (N,)
+    interactions : ±1 tensor of shape (n_dims, N, system_size)
     """
     num_spins = np.prod(system_shape)
     indices = np.arange(num_spins).reshape(system_shape)
     interactions = []
     for i in range(len(system_shape)):
         shifted = tf.transpose(tf.gather(
-            tf.transpose(states), np.roll(indices, 1, i).flatten()))
-        interactions.append(tf.reduce_sum(states * shifted, 1))
-    return tf.reduce_sum(tf.stack(interactions, 1), 1)
+            tf.transpose(states), np.roll(indices, -1, i).flatten()))
+        interactions.append(states * shifted)
+    return tf.stack(interactions, 0)

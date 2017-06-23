@@ -2,7 +2,6 @@
 from helpers import scope_op, gather_windows, update_windows, pad
 import tensorflow as tf
 import numpy as np
-from functools import partial
 
 
 class Sampler(object):
@@ -11,17 +10,18 @@ class Sampler(object):
     MAX_NUM_SAMPLERS = 1000
     SWEEPFACTOR = 10
 
-    def __init__(self, system_shape, k, num_samples):
+    def __init__(self, model, system_shape, r, num_samples):
         """Initialise."""
+        self.model = model
         self.system_shape = system_shape
-        self.k = k
+        self.r = r
         self.num_samples = num_samples
 
         self.n_dims = len(system_shape)
         self.num_spins = np.prod(system_shape)
-        self.full_window_shape = (k*2-1,)*self.n_dims
+        self.full_window_shape = (r*2-1,)*self.n_dims
         self.full_window_size = np.prod(self.full_window_shape)
-        self.half_window_shape = (k,)*self.n_dims
+        self.half_window_shape = (r,)*self.n_dims
         self.half_window_size = np.prod(self.half_window_shape)
 
         self.num_samplers = min(num_samples, self.MAX_NUM_SAMPLERS)
@@ -60,7 +60,7 @@ class Sampler(object):
                 dtype=tf.float32, trainable=False)
 
     @scope_op()
-    def mcmc_reset(self, model):
+    def mcmc_reset(self):
         """Reset MCMC variables."""
         states = tf.random_uniform(
             [self.num_samplers, self.num_spins], 0, 2, dtype=tf.int32)*2-1
@@ -68,8 +68,8 @@ class Sampler(object):
         states_shaped = tf.reshape(states,
                                    (self.num_samplers,)+self.system_shape)
         states_padded = pad(states_shaped, self.system_shape,
-                            [(self.k-1)//2]*self.n_dims)
-        factors = tf.reshape(model.factors(states_padded),
+                            [(self.r-1)//2]*self.n_dims)
+        factors = tf.reshape(self.model.factors(states_padded),
                              (self.num_samplers, -1))
 
         return tf.group(
@@ -86,7 +86,7 @@ class Sampler(object):
         )
 
     @scope_op()
-    def mcmc_step(self, model, i):
+    def mcmc_step(self, i):
         """Do MCMC Step."""
         centers = self.flip_positions_var[i]
 
@@ -101,7 +101,7 @@ class Sampler(object):
         flipper[(self.full_window_size-1)//2] = -1
         flipped_spins = spin_windows * flipper
         flipped_factors = tf.reshape(
-            model.factors(
+            self.model.factors(
                 tf.reshape(flipped_spins,
                            (self.num_samplers,)+self.full_window_shape)),
             (self.num_samplers, -1))
@@ -132,7 +132,7 @@ class Sampler(object):
             return i+1
 
     @scope_op()
-    def mcmc_op(self, model):
+    def mcmc_op(self):
         """
         Compute MCMC Samples.
 
@@ -140,10 +140,10 @@ class Sampler(object):
         -------
         states : tensor of shape (N, system_size)
         """
-        with tf.control_dependencies([self.mcmc_reset(model)]):
+        with tf.control_dependencies([self.mcmc_reset()]):
             loop = tf.while_loop(
                 lambda i: i < self.sample_its,
-                partial(self.mcmc_step, model),
+                self.mcmc_step,
                 [tf.constant(0)],
                 parallel_iterations=1,
                 back_prop=False
