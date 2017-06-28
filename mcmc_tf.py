@@ -15,7 +15,7 @@ LEARNING_RATE = 3E-3
 K = 5
 ALPHA = 4
 SCALE = 1E-2
-SYSTEM_SHAPE = (40,)
+SYSTEM_SHAPE = (10, 10)
 N_DIMS = len(SYSTEM_SHAPE)
 NUM_SPINS = np.prod(SYSTEM_SHAPE)
 FULL_WINDOW_SHAPE = (K*2-1,)*N_DIMS
@@ -28,8 +28,8 @@ NUM_SAMPLES = 100
 OPTIMIZATION_ITS = 10000
 ENERGY_BATCH_SIZE = 1000
 
-NUM_EVAL_SAMPLES = 10000
-EVAL_FREQ = 500
+NUM_EVAL_SAMPLES = 1000
+EVAL_FREQ = 20
 
 
 @scope_op()
@@ -84,7 +84,7 @@ def ising_energy(model, states):
         (batch_size, NUM_SPINS, HALF_WINDOW_SIZE))
 
     log_pop = tf.reduce_sum(factors_flipped - factor_windows, 2)
-    alignedness = tf.reduce_sum(interactions(states, SYSTEM_SHAPE), [0, 2])
+    alignedness = tf.reduce_sum(interactions(states, SYSTEM_SHAPE), [1, 2])
     energy = -H * tf.reduce_sum(tf.exp(log_pop), 1) - \
         tf.cast(alignedness, tf.complex64)
     return energy / NUM_SPINS

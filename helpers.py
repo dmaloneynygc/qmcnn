@@ -184,7 +184,7 @@ def interactions(states, system_shape):
 
     Returns
     -------
-    interactions : ±1 tensor of shape (n_dims, N, system_size)
+    interactions : ±1 tensor of shape (N, n_dims, system_size)
     """
     num_spins = np.prod(system_shape)
     indices = np.arange(num_spins).reshape(system_shape)
@@ -193,4 +193,4 @@ def interactions(states, system_shape):
         shifted = tf.transpose(tf.gather(
             tf.transpose(states), np.roll(indices, -1, i).flatten()))
         interactions.append(states * shifted)
-    return tf.stack(interactions, 0)
+    return tf.stack(interactions, 1)

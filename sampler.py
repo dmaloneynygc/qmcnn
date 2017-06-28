@@ -8,7 +8,8 @@ class Sampler(object):
     """Sampler class."""
 
     MAX_NUM_SAMPLERS = 1000
-    SWEEPFACTOR = 10
+    SWEEPFACTOR = 5
+    THERMFACTOR = 1
 
     def __init__(self, model, system_shape, r, num_samples):
         """Initialise."""
@@ -27,11 +28,12 @@ class Sampler(object):
         self.num_samplers = min(num_samples, self.MAX_NUM_SAMPLERS)
         self.its_per_sample = self.num_spins * self.SWEEPFACTOR
         self.samples_per_sampler = num_samples // self.num_samplers
-        self.therm_its = self.samples_per_sampler * self.its_per_sample
+        self.therm_its = self.samples_per_sampler * self.its_per_sample * \
+            self.THERMFACTOR
         self.sample_its = (self.therm_its + (self.samples_per_sampler-1)
                            * self.its_per_sample + 1)
 
-        with tf.variable_scope("sampler_%03d" % np.random.randint(1000)):
+        with tf.variable_scope("sampler_%08d" % np.random.randint(10**8)):
             self.current_samples_var = tf.get_variable(
                 "current_samples",
                 shape=[self.num_samplers, self.num_spins],

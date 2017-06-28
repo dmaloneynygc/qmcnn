@@ -15,7 +15,7 @@ class CRBM(object):
         self.pad_size = pad_size
         self.n_dims = n_dims
 
-        with tf.variable_scope("factors"):
+        with tf.device('/gpu:0'), tf.variable_scope("factors"):
             tf.get_variable(
                 "filters", shape=[self.k]*self.n_dims+[1]+[2*self.alpha],
                 dtype=tf.float32,
@@ -81,7 +81,7 @@ class DCRBM:
         self.n_dims = n_dims
 
         shape = [self.k]*self.n_dims
-        with tf.variable_scope("factors"):
+        with tf.device('/gpu:0'), tf.variable_scope("factors"):
             for l, (in_, out) in enumerate(self.shapes):
                 tf.get_variable(
                     "filters_%d" % l, shape=shape + [in_, out],
