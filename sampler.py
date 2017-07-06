@@ -1,5 +1,5 @@
 """Sampler module."""
-from helpers import scope_op, gather_windows, update_windows, pad
+from helpers import scope_op, pad, unpad
 import tensorflow as tf
 import numpy as np
 
@@ -33,10 +33,14 @@ class Sampler(object):
         self.sample_its = (self.therm_its + (self.samples_per_sampler-1)
                            * self.its_per_sample + 1)
 
-        with tf.variable_scope("sampler_%08d" % np.random.randint(10**8)):
+        self.padded_shape = tuple(s+r-1 for s in system_shape)
+        self.padded_size = np.prod(self.padded_shape)
+
+        name = "sampler_%08d" % np.random.randint(10**8)
+        with tf.device('/cpu:0'), tf.variable_scope(name):
             self.current_samples_var = tf.get_variable(
                 "current_samples",
-                shape=[self.num_samplers, self.num_spins],
+                shape=[self.num_samplers, self.padded_size],
                 initializer=tf.constant_initializer(0),
                 dtype=tf.int32, trainable=False)
             self.current_factors_var = tf.get_variable(
@@ -75,7 +79,9 @@ class Sampler(object):
                              (self.num_samplers, -1))
 
         return tf.group(
-            tf.assign(self.current_samples_var, states),
+            tf.assign(self.current_samples_var,
+                      tf.reshape(states_padded,
+                                 (self.num_samplers, self.padded_size))),
             tf.assign(self.current_factors_var, factors),
             tf.assign(self.samples_var,
                       tf.zeros_like(self.samples_var, dtype=tf.int32)),
@@ -92,36 +98,42 @@ class Sampler(object):
         """Do MCMC Step."""
         centers = self.flip_positions_var[i]
 
-        spin_windows = gather_windows(
-            self.current_samples_var, centers,
-            self.system_shape, self.full_window_shape)
-        factor_windows = gather_windows(
-            self.current_factors_var, centers,
-            self.system_shape, self.half_window_shape)
+        flipper = np.ones((self.num_spins, self.num_spins), dtype=np.int32)
+        flipper[np.arange(self.num_spins), np.arange(self.num_spins)] = -1
+        flipper_shaped = flipper.reshape((self.num_spins,) + self.system_shape)
+        pad = [[0, 0]] + [[(self.r-1)//2, (self.r-1)//2]]*self.n_dims
+        flipper_padded = np.pad(flipper_shaped, pad, 'wrap') \
+            .reshape((self.num_spins, self.padded_size))
+        flipper_gathered = tf.gather(flipper_padded, centers)
 
-        flipper = np.ones(self.full_window_size, dtype=np.int32)
-        flipper[(self.full_window_size-1)//2] = -1
-        flipped_spins = spin_windows * flipper
+        flipped_spins = self.current_samples_var * flipper_gathered
         flipped_factors = tf.reshape(
             self.model.factors(
                 tf.reshape(flipped_spins,
-                           (self.num_samplers,)+self.full_window_shape)),
-            (self.num_samplers, -1))
+                           (self.num_samplers,)+self.padded_shape)),
+            (self.num_samplers, self.num_spins))
         accept_prob = tf.pow(tf.abs(tf.exp(
-            tf.reduce_sum(flipped_factors - factor_windows, 1))), 2)
+            tf.reduce_sum(flipped_factors - self.current_factors_var, 1))), 2)
         mask = accept_prob > self.accept_sample_var[i]
-        current_samples_op = update_windows(
-            self.current_samples_var, centers, flipped_spins, mask,
-            self.system_shape, self.full_window_shape)
-        current_factors_op = update_windows(
-            self.current_factors_var, centers, flipped_factors, mask,
-            self.system_shape, self.half_window_shape)
+        mask_idxs = tf.boolean_mask(np.arange(self.num_samplers), mask)
+        current_samples_op = tf.scatter_update(
+            self.current_samples_var, mask_idxs,
+            tf.boolean_mask(flipped_spins, mask))
+        current_factors_op = tf.scatter_update(
+            self.current_factors_var, mask_idxs,
+            tf.boolean_mask(flipped_factors, mask))
 
         def write_samples():
             """Write current_samples to samples."""
             j = (i - self.therm_its)//self.its_per_sample
+            samples = tf.reshape(
+                unpad(
+                    tf.reshape(self.current_samples_var,
+                               (self.num_samplers,)+self.padded_shape),
+                    ((self.r-1)//2,)*self.n_dims),
+                (self.num_samplers, self.num_spins))
             return tf.scatter_update(
-                self.samples_var, j, self.current_samples_var)
+                self.samples_var, j, samples)
 
         with tf.control_dependencies([current_samples_op, current_factors_op]):
             write_op = tf.cond(
@@ -142,14 +154,15 @@ class Sampler(object):
         -------
         states : tensor of shape (N, system_size)
         """
-        with tf.control_dependencies([self.mcmc_reset()]):
-            loop = tf.while_loop(
-                lambda i: i < self.sample_its,
-                self.mcmc_step,
-                [tf.constant(0)],
-                parallel_iterations=1,
-                back_prop=False
-            )
-        with tf.control_dependencies([loop]):
-            return tf.reshape(self.samples_var,
-                              [self.num_samples, self.num_spins])
+        with tf.device('/cpu:0'):
+            with tf.control_dependencies([self.mcmc_reset()]):
+                loop = tf.while_loop(
+                    lambda i: i < self.sample_its,
+                    self.mcmc_step,
+                    [tf.constant(0)],
+                    parallel_iterations=1,
+                    back_prop=False
+                )
+            with tf.control_dependencies([loop]):
+                return tf.reshape(self.samples_var,
+                                  [self.num_samples, self.num_spins])

@@ -86,10 +86,9 @@ def pad(x, system_shape, pad_size):
     -------
     x : tensor
     """
-    dtype = x.dtype
-    res = unpad(tf.tile(tf.cast(x, tf.int32), (1,)+(3,)*len(pad_size)),
+    res = unpad(tf.tile(x, (1,)+(3,)*len(pad_size)),
                 tuple(s-p for s, p in zip(system_shape, pad_size)))
-    return tf.cast(res, dtype)
+    return res
 
 
 @scope_op()
