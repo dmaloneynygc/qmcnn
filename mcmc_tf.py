@@ -91,6 +91,57 @@ def ising_energy(model, states):
 
 
 @scope_op()
+def heisenberg_energy(model, states):
+    """
+    Compute local energies of AntiFerroMagneticHeisenberg model.
+
+    Parameters
+    ----------
+    states : Tensor of shape (N, system_size)
+
+    Returns
+    -------
+    energies : tensor of shape (N,)
+    """
+    FULL_WINDOW_SHAPE = (K*2-1+2,)*N_DIMS
+    FULL_WINDOW_SIZE = np.prod(FULL_WINDOW_SHAPE)
+    HALF_WINDOW_SHAPE = (K+2,)*N_DIMS
+    HALF_WINDOW_SIZE = np.prod(HALF_WINDOW_SHAPE)
+
+    batch_size = tf.shape(states)[0]
+    states_shaped = tf.reshape(states, (batch_size,)+SYSTEM_SHAPE)
+    states_padded = pad(states_shaped, SYSTEM_SHAPE, [(K-1)//2]*N_DIMS)
+    factors = tf.reshape(model.factors(states_padded), (batch_size, -1))
+    factor_windows = all_windows(factors, SYSTEM_SHAPE, HALF_WINDOW_SHAPE)
+    spin_windows = all_windows(states, SYSTEM_SHAPE, FULL_WINDOW_SHAPE)
+
+    flippers = np.zeros((N_DIMS, FULL_WINDOW_SIZE), dtype=np.int32)
+    for d in range(N_DIMS):
+        flipper = np.ones(FULL_WINDOW_SHAPE, dtype=np.int32)
+        halfpoint = tuple((s-1)//2 for s in FULL_WINDOW_SHAPE)
+        neighbour = tuple(x+1 if i == d else x
+                          for i, x in enumerate(halfpoint))
+        flipper[halfpoint] = -1
+        flipper[neighbour] = -1
+        flippers[d, :] = flipper.flatten()
+
+    # [N, flip_direction=1..N_DIMS, spin_window=1..SYSTEM_SIZE, window_size]
+    spins_flipped = spin_windows[:, None, :, :] * flippers[None, :, None, :]
+    factors_flipped = tf.reshape(
+        model.factors(tf.reshape(
+            spins_flipped, (batch_size*N_DIMS*NUM_SPINS,)+FULL_WINDOW_SHAPE)),
+        (batch_size, N_DIMS, NUM_SPINS, HALF_WINDOW_SIZE))
+
+    log_pop = tf.reduce_sum(factors_flipped - factor_windows[:, None, :, :], 3)
+    ints = tf.cast(interactions(states, SYSTEM_SHAPE), tf.complex64)
+
+    terms = -(1 - ints) * tf.exp(log_pop) + ints
+    energy = tf.reduce_sum(terms, [1, 2])
+
+    return energy / NUM_SPINS
+
+
+@scope_op()
 def batched_op(fn, states, batch_size):
     """Do on-graph batched computation."""
     results = tf.map_fn(
@@ -128,16 +179,34 @@ def optimize_op(sampler, model, energy_fn):
     return energies, train_op
 
 
+@scope_op()
+def eval_op(sampler, model, energy_fn):
+    """
+    Perform evaluation of energies.
+
+    Returns
+    -------
+    energies : tensor of shape (N,)
+        Energy of MCMC samples
+    """
+    with tf.device('/cpu:0'):
+        return batched_op(
+            energy_fn, sampler.mcmc_op(), ENERGY_BATCH_SIZE)
+
+
 config = tf.ConfigProto(
     # log_device_placement=True,
     allow_soft_placement=True
 )
 with tf.Graph().as_default(), tf.Session(config=config) as sess:
     model = CRBM(K, (K-1)//2, ALPHA, N_DIMS)
-    energy_fn = partial(ising_energy, model)
+    # energy_fn = partial(ising_energy, model)
+    # num_flips = 1
+    energy_fn = partial(heisenberg_energy, model)
+    num_flips = 2
 
-    sampler = Sampler(model, SYSTEM_SHAPE, K, NUM_SAMPLES)
-    eval_sampler = Sampler(model, SYSTEM_SHAPE, K, NUM_EVAL_SAMPLES)
+    sampler = Sampler(model, SYSTEM_SHAPE, K, NUM_SAMPLES, num_flips)
+    eval_sampler = Sampler(model, SYSTEM_SHAPE, K, NUM_EVAL_SAMPLES, num_flips)
 
     optimize = optimize_op(sampler, model, energy_fn)
     eval_energies = batched_op(
@@ -148,7 +217,9 @@ with tf.Graph().as_default(), tf.Session(config=config) as sess:
     # writer = tf.summary.FileWriter('./logs', sess.graph)
     for it in range(OPTIMIZATION_ITS):
         start = time()
-        e, _ = sess.run(optimize)
+        e, _ = sess.run(optimize, feed_dict={
+            sampler.new_samples: it == 0
+        })
         e = np.real(e)
         print("It %d, E=%.5f (%.2e) %.1fs" %
               (it+1, e.mean(), e.std()/np.sqrt(e.shape[0]), time()-start),

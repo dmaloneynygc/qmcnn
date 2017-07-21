@@ -8,15 +8,16 @@ class Sampler(object):
     """Sampler class."""
 
     MAX_NUM_SAMPLERS = 1000
-    SWEEPFACTOR = 5
-    THERMFACTOR = 1
+    SWEEPFACTOR = 10
+    THERMFACTOR = 4
 
-    def __init__(self, model, system_shape, r, num_samples):
+    def __init__(self, model, system_shape, r, num_samples, num_flips):
         """Initialise."""
         self.model = model
         self.system_shape = system_shape
         self.r = r
         self.num_samples = num_samples
+        self.num_flips = num_flips
 
         self.n_dims = len(system_shape)
         self.num_spins = np.prod(system_shape)
@@ -35,6 +36,8 @@ class Sampler(object):
 
         self.padded_shape = tuple(s+r-1 for s in system_shape)
         self.padded_size = np.prod(self.padded_shape)
+
+        self.new_samples = tf.Variable(True)
 
         name = "sampler_%08d" % np.random.randint(10**8)
         with tf.device('/cpu:0'), tf.variable_scope(name):
@@ -56,7 +59,7 @@ class Sampler(object):
                 dtype=tf.int32, trainable=False)
             self.flip_positions_var = tf.get_variable(
                 "flip_positions",
-                shape=[self.sample_its, self.num_samplers],
+                shape=[self.sample_its, self.num_samplers, self.num_flips],
                 initializer=tf.constant_initializer(0),
                 dtype=tf.int32, trainable=False)
             self.accept_sample_var = tf.get_variable(
@@ -68,26 +71,30 @@ class Sampler(object):
     @scope_op()
     def mcmc_reset(self):
         """Reset MCMC variables."""
-        states = tf.random_uniform(
-            [self.num_samplers, self.num_spins], 0, 2, dtype=tf.int32)*2-1
-        states = tf.cast(states, tf.int32)
-        states_shaped = tf.reshape(states,
-                                   (self.num_samplers,)+self.system_shape)
-        states_padded = pad(states_shaped, self.system_shape,
-                            [(self.r-1)//2]*self.n_dims)
-        factors = tf.reshape(self.model.factors(states_padded),
-                             (self.num_samplers, -1))
+        uniform_states = tf.random_uniform(
+            (self.num_samplers,)+self.system_shape, 0, 2, dtype=tf.int32)*2-1
+        uniform_states_padded = pad(uniform_states, self.system_shape,
+                                    [(self.r-1)//2]*self.n_dims)
+        uniform_states_flattened = tf.reshape(uniform_states_padded,
+                                              (self.num_samplers, -1))
+
+        states = tf.cond(self.new_samples,
+                         lambda: uniform_states_flattened,
+                         lambda: self.current_samples_var)
+
+        factors = tf.reshape(
+            self.model.factors(
+                tf.reshape(states, (self.num_samplers,)+self.padded_shape)
+            ), (self.num_samplers, -1))
 
         return tf.group(
-            tf.assign(self.current_samples_var,
-                      tf.reshape(states_padded,
-                                 (self.num_samplers, self.padded_size))),
+            tf.assign(self.current_samples_var, states),
             tf.assign(self.current_factors_var, factors),
             tf.assign(self.samples_var,
                       tf.zeros_like(self.samples_var, dtype=tf.int32)),
             tf.assign(self.flip_positions_var, tf.random_uniform(
-                [self.sample_its, self.num_samplers], 0, self.num_spins,
-                dtype=tf.int32)),
+                [self.sample_its, self.num_samplers, self.num_flips],
+                0, self.num_spins, dtype=tf.int32)),
             tf.assign(self.accept_sample_var, tf.random_uniform(
                 [self.sample_its, self.num_samplers], 0., 1.,
                 dtype=tf.float32)),
@@ -105,8 +112,9 @@ class Sampler(object):
         flipper_padded = np.pad(flipper_shaped, pad, 'wrap') \
             .reshape((self.num_spins, self.padded_size))
         flipper_gathered = tf.gather(flipper_padded, centers)
+        combined_flipper = tf.reduce_prod(flipper_gathered, 1)
 
-        flipped_spins = self.current_samples_var * flipper_gathered
+        flipped_spins = self.current_samples_var * combined_flipper
         flipped_factors = tf.reshape(
             self.model.factors(
                 tf.reshape(flipped_spins,
@@ -115,6 +123,7 @@ class Sampler(object):
         accept_prob = tf.pow(tf.abs(tf.exp(
             tf.reduce_sum(flipped_factors - self.current_factors_var, 1))), 2)
         mask = accept_prob > self.accept_sample_var[i]
+        # mask = tf.Print(mask, [tf.reduce_mean(tf.cast(mask, tf.float32))])
         mask_idxs = tf.boolean_mask(np.arange(self.num_samplers), mask)
         current_samples_op = tf.scatter_update(
             self.current_samples_var, mask_idxs,
